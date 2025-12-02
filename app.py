@@ -28,33 +28,52 @@ def get_secret(key: str, default: str = "") -> str:
         return default
 
 
-# =========================
-# SECRETS PARA LLAMADOS
-# =========================
+# ============================================================
+# SECRETS APP 1 — LLAMADOS DE ATENCIÓN
+# ============================================================
 
+# API PRINCIPAL (llamados)
 API_KEY = get_secret("AIRTABLE_API_KEY")
 BASE_ID = get_secret("AIRTABLE_BASE_ID")
 TBL_LLAMADOS = get_secret("AIRTABLE_TABLE_LLAMADOS", "llamados")
 
-# Tabla externa (lookup)
+# API SECUNDARIA (plantilla app1)
+EXT_API_KEY = get_secret("EXT_AIRTABLE_API_KEY")
 EXT_BASE_ID = get_secret("EXT_AIRTABLE_BASE_ID", BASE_ID or "")
-EXT_TABLE = get_secret("EXT_AIRTABLE_TABLE", "")
+EXT_TABLE = get_secret("EXT_AIRTABLE_TABLE", "plantilla")
 EXT_DNI_FIELD = get_secret("EXT_DNI_FIELD", "documentoDniONie")
 EXT_NAME_FIELD = get_secret("EXT_NAME_FIELD", "nombre")
 
-# =========================
-# SECRETS PARA QUITAR HORAS (MISMA BASE, OTRA TABLA)
-# =========================
+# ============================================================
+# SECRETS APP 2 — QUITAR HORAS
+# ============================================================
 
-TRABAJADORES_TABLE_NAME = get_secret("TRABAJADORES_TABLE_NAME", "plantilla")
-QUITAR_HORAS_TABLE_NAME = get_secret("QUITAR_HORAS_TABLE_NAME", "quitar_horas_trabajadores")
+# API PRINCIPAL (quitar_horas_trabajadores)
+HORAS_API_KEY = get_secret("HORAS_AIRTABLE_API_KEY")
+HORAS_BASE_ID = get_secret("HORAS_AIRTABLE_BASE_ID")
+HORAS_QUITAR_HORAS_TABLE_NAME = get_secret("HORAS_QUITAR_HORAS_TABLE_NAME", "quitar_horas_trabajadores")
+
+# API SECUNDARIA (plantilla app2)
+HORAS_EXT_API_KEY = get_secret("HORAS_EXT_AIRTABLE_API_KEY")
+HORAS_EXT_BASE_ID = get_secret("HORAS_EXT_AIRTABLE_BASE_ID", HORAS_BASE_ID or "")
+HORAS_TRABAJADORES_TABLE_NAME = get_secret("HORAS_TRABAJADORES_TABLE_NAME", "plantilla")
+
+# ============================================================
 
 if not (API_KEY and BASE_ID and TBL_LLAMADOS):
-    st.error("Faltan variables: AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_LLAMADOS.")
+    st.error("Faltan variables para APP1: AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_LLAMADOS.")
     st.stop()
 
-HEADERS = {
+if not (HORAS_API_KEY and HORAS_BASE_ID and HORAS_QUITAR_HORAS_TABLE_NAME):
+    st.error("Faltan variables para APP2: HORAS_AIRTABLE_API_KEY, HORAS_AIRTABLE_BASE_ID, HORAS_QUITAR_HORAS_TABLE_NAME.")
+    st.stop()
+
+HEADERS_MAIN = {
     "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json",
+}
+HEADERS_EXT = {
+    "Authorization": f"Bearer {EXT_API_KEY or API_KEY}",
     "Content-Type": "application/json",
 }
 
@@ -70,13 +89,13 @@ def normalize_dni(raw: str) -> str:
     return s.replace(" ", "")
 
 
-def airtable_request(method: str, url: str, params=None, data=None, max_retries=3):
+def airtable_request(method: str, url: str, headers: dict, params=None, data=None, max_retries=3):
     for attempt in range(1, max_retries + 1):
         try:
             resp = requests.request(
                 method,
                 url,
-                headers=HEADERS,
+                headers=headers,
                 params=params,
                 data=json.dumps(data) if data else None,
                 timeout=30
@@ -128,25 +147,26 @@ def ui_datetime_input(label: str, value: datetime, key_prefix: str = "dt") -> da
 # =========================
 
 class AirtableTable:
-    def __init__(self, base_id: str, table: str):
+    def __init__(self, base_id: str, table: str, headers: dict):
         self.base_id = base_id
         self.table = table
+        self.headers = headers
 
     @property
     def base_url(self) -> str:
         return f"https://api.airtable.com/v0/{self.base_id}/{self.table}"
 
     def list(self, params: dict):
-        return airtable_request("GET", self.base_url, params=params)
+        return airtable_request("GET", self.base_url, headers=self.headers, params=params)
 
     def create(self, fields: dict):
         payload = {"fields": fields}
-        return airtable_request("POST", self.base_url, data=payload)
+        return airtable_request("POST", self.base_url, headers=self.headers, data=payload)
 
 
 class LlamadosRepo:
     def __init__(self, base_id: str, table_name: str):
-        self.tbl = AirtableTable(base_id, table_name)
+        self.tbl = AirtableTable(base_id, table_name, HEADERS_MAIN)
 
     def list_by_dni(self, dni: str, max_records=500):
         formula = f"{{dni}}='{dni}'"
@@ -168,7 +188,6 @@ class LlamadosRepo:
         return resultados[:max_records]
 
     def list_all(self, max_records=5000):
-        """Trae todos los llamados (para ranking)."""
         params = {"pageSize": 100}
         resultados, offset = [], None
         while True:
@@ -193,10 +212,10 @@ class LlamadosRepo:
 
 
 class TrabajadoresLookup:
-    """Consulta la tabla externa por DNI y devuelve nombre y sugerencias."""
+    """Consulta la tabla externa por DNI y devuelve nombre y sugerencias (usa API secundaria de APP1)."""
     def __init__(self, base_id: str, table: str, dni_field: str, name_field: str):
         self.enabled = bool(table)
-        self.tbl = AirtableTable(base_id, table) if self.enabled else None
+        self.tbl = AirtableTable(base_id, table, HEADERS_EXT) if self.enabled else None
         self.dni_field = dni_field
         self.name_field = name_field
 
@@ -243,7 +262,7 @@ lookup_repo = TrabajadoresLookup(EXT_BASE_ID or BASE_ID, EXT_TABLE, EXT_DNI_FIEL
 
 def app_llamados_atencion():
     st.title("Control de llamados de atención")
-    st.caption("Busca por DNI en la tabla externa, trae el nombre y registra llamados en Airtable 'Llamados'.")
+    st.caption("Busca por DNI en la tabla externa, trae el nombre y registra llamados en Airtable 'llamados'.")
 
     # --- Config censurada ---
     with st.expander("Config (solo lectura)", expanded=False):
@@ -253,9 +272,11 @@ def app_llamados_atencion():
             if len(value) <= visible * 2:
                 return "*" * len(value)
             return f"{value[:visible]}{'*' * (len(value) - visible * 2)}{value[-visible:]}"
-        st.write("🔒 Configuración actual (valores privados censurados):")
+        st.write("🔒 Configuración APP1:")
         st.write("Base Llamados:", mask_value(BASE_ID))
         st.write("Tabla Llamados:", TBL_LLAMADOS)
+        st.write("API principal (llamados):", mask_value(API_KEY))
+        st.write("API secundaria (plantilla):", mask_value(EXT_API_KEY or API_KEY))
         st.write("Lookup externo activo:", bool(lookup_repo.enabled))
         if lookup_repo.enabled:
             st.write("Base externa:", mask_value(EXT_BASE_ID))
@@ -474,11 +495,12 @@ def app_llamados_atencion():
 
 @st.cache_data(show_spinner=False)
 def get_trabajadores_horas():
+    """Lee plantilla usando la API secundaria de APP2."""
     try:
-        table = Table(API_KEY, BASE_ID, TRABAJADORES_TABLE_NAME)
+        table = Table(HORAS_EXT_API_KEY or HORAS_API_KEY, HORAS_EXT_BASE_ID or HORAS_BASE_ID, HORAS_TRABAJADORES_TABLE_NAME)
         records = table.all()
     except HTTPError as e:
-        st.error("Error leyendo tabla TRABAJADORES (horas).")
+        st.error("Error leyendo tabla TRABAJADORES (plantilla) para quitar horas.")
         st.code(f"{e.response.status_code}\n{e.response.text}")
         return []
 
@@ -493,7 +515,7 @@ def get_trabajadores_horas():
     return trabajadores
 
 
-def buscar_trabajadores_por_dni_horas(dni):
+def buscar_trabajadores_por_dni_horas(dni: str):
     dni = (dni or "").strip().upper()
     if not dni:
         return []
@@ -502,8 +524,9 @@ def buscar_trabajadores_por_dni_horas(dni):
 
 @st.cache_data(show_spinner=False)
 def get_quitas_de_horas():
+    """Lee quitar_horas_trabajadores usando la API principal de APP2."""
     try:
-        table = Table(API_KEY, BASE_ID, QUITAR_HORAS_TABLE_NAME)
+        table = Table(HORAS_API_KEY, HORAS_BASE_ID, HORAS_QUITAR_HORAS_TABLE_NAME)
         records = table.all()
     except HTTPError as e:
         st.error("Error leyendo tabla QUITAR_HORAS_TRABAJADORES.")
@@ -527,8 +550,9 @@ def get_quitas_de_horas():
     return df
 
 
-def registrar_quita_horas(trabajador, horas):
-    table = Table(API_KEY, BASE_ID, QUITAR_HORAS_TABLE_NAME)
+def registrar_quita_horas(trabajador: Dict, horas: int):
+    """Escribe en quitar_horas_trabajadores usando la API principal de APP2."""
+    table = Table(HORAS_API_KEY, HORAS_BASE_ID, HORAS_QUITAR_HORAS_TABLE_NAME)
     fields = {
         "Trabajador_Nombre": trabajador["Nombre"],
         "Trabajador_DNI": trabajador["DNI"],
@@ -546,6 +570,21 @@ def app_quitar_horas():
 2. Seleccionar cuántas horas quitar (1 a 9)  
 3. Ver tabla histórica con filtros  
 """)
+
+    # Config debug (opcional)
+    with st.expander("Config APP2 (solo lectura)", expanded=False):
+        def mask_value(value: str, visible: int = 4) -> str:
+            if not value:
+                return "—"
+            if len(value) <= visible * 2:
+                return "*" * len(value)
+            return f"{value[:visible]}{'*' * (len(value) - visible * 2)}{value[-visible:]}"
+        st.write("Base horas:", mask_value(HORAS_BASE_ID))
+        st.write("Tabla quitar horas:", HORAS_QUITAR_HORAS_TABLE_NAME)
+        st.write("API principal horas:", mask_value(HORAS_API_KEY))
+        st.write("Base plantilla horas:", mask_value(HORAS_EXT_BASE_ID or HORAS_BASE_ID))
+        st.write("Tabla plantilla horas:", HORAS_TRABAJADORES_TABLE_NAME)
+        st.write("API secundaria plantilla horas:", mask_value(HORAS_EXT_API_KEY or HORAS_API_KEY))
 
     if "trabajador_horas" not in st.session_state:
         st.session_state.trabajador_horas = None
