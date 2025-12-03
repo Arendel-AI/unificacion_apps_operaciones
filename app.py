@@ -51,21 +51,29 @@ EXT_NAME_FIELD = get_secret("EXT_NAME_FIELD", "nombre")
 # API PRINCIPAL (quitar_horas_trabajadores)
 HORAS_API_KEY = get_secret("HORAS_AIRTABLE_API_KEY")
 HORAS_BASE_ID = get_secret("HORAS_AIRTABLE_BASE_ID")
-HORAS_QUITAR_HORAS_TABLE_NAME = get_secret("HORAS_QUITAR_HORAS_TABLE_NAME", "quitar_horas_trabajadores")
+HORAS_QUITAR_HORAS_TABLE_NAME = get_secret(
+    "HORAS_QUITAR_HORAS_TABLE_NAME", "quitar_horas_trabajadores"
+)
 
 # API SECUNDARIA (plantilla app2)
 HORAS_EXT_API_KEY = get_secret("HORAS_EXT_AIRTABLE_API_KEY")
 HORAS_EXT_BASE_ID = get_secret("HORAS_EXT_AIRTABLE_BASE_ID", HORAS_BASE_ID or "")
-HORAS_TRABAJADORES_TABLE_NAME = get_secret("HORAS_TRABAJADORES_TABLE_NAME", "plantilla")
+HORAS_TRABAJADORES_TABLE_NAME = get_secret(
+    "HORAS_TRABAJADORES_TABLE_NAME", "plantilla"
+)
 
 # ============================================================
 
 if not (API_KEY and BASE_ID and TBL_LLAMADOS):
-    st.error("Faltan variables para APP1: AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_LLAMADOS.")
+    st.error(
+        "Faltan variables para APP1: AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_LLAMADOS."
+    )
     st.stop()
 
 if not (HORAS_API_KEY and HORAS_BASE_ID and HORAS_QUITAR_HORAS_TABLE_NAME):
-    st.error("Faltan variables para APP2: HORAS_AIRTABLE_API_KEY, HORAS_AIRTABLE_BASE_ID, HORAS_QUITAR_HORAS_TABLE_NAME.")
+    st.error(
+        "Faltan variables para APP2: HORAS_AIRTABLE_API_KEY, HORAS_AIRTABLE_BASE_ID, HORAS_QUITAR_HORAS_TABLE_NAME."
+    )
     st.stop()
 
 HEADERS_MAIN = {
@@ -80,6 +88,7 @@ HEADERS_EXT = {
 # =========================
 # UTILIDADES COMUNES
 # =========================
+
 
 def normalize_dni(raw: str) -> str:
     if not raw:
@@ -98,12 +107,12 @@ def airtable_request(method: str, url: str, headers: dict, params=None, data=Non
                 headers=headers,
                 params=params,
                 data=json.dumps(data) if data else None,
-                timeout=30
+                timeout=30,
             )
             if resp.status_code in (200, 201):
                 return resp.json()
             if resp.status_code == 429:
-                time_mod.sleep(min(2 ** attempt, 10))
+                time_mod.sleep(min(2**attempt, 10))
                 continue
             try:
                 err = resp.json()
@@ -146,6 +155,7 @@ def ui_datetime_input(label: str, value: datetime, key_prefix: str = "dt") -> da
 # REPOSITORIOS AIRTABLE (LLAMADOS)
 # =========================
 
+
 class AirtableTable:
     def __init__(self, base_id: str, table: str, headers: dict):
         self.base_id = base_id
@@ -157,11 +167,15 @@ class AirtableTable:
         return f"https://api.airtable.com/v0/{self.base_id}/{self.table}"
 
     def list(self, params: dict):
-        return airtable_request("GET", self.base_url, headers=self.headers, params=params)
+        return airtable_request(
+            "GET", self.base_url, headers=self.headers, params=params
+        )
 
     def create(self, fields: dict):
         payload = {"fields": fields}
-        return airtable_request("POST", self.base_url, headers=self.headers, data=payload)
+        return airtable_request(
+            "POST", self.base_url, headers=self.headers, data=payload
+        )
 
 
 class LlamadosRepo:
@@ -200,7 +214,9 @@ class LlamadosRepo:
                 break
         return resultados[:max_records]
 
-    def create_llamado(self, dni: str, nombre: str, fecha_iso: str, motivo: str, quien_realiza: str):
+    def create_llamado(
+        self, dni: str, nombre: str, fecha_iso: str, motivo: str, quien_realiza: str
+    ):
         fields = {
             "dni": dni,
             "nombre": nombre,
@@ -213,6 +229,7 @@ class LlamadosRepo:
 
 class TrabajadoresLookup:
     """Consulta la tabla externa por DNI y devuelve nombre y sugerencias (usa API secundaria de APP1)."""
+
     def __init__(self, base_id: str, table: str, dni_field: str, name_field: str):
         self.enabled = bool(table)
         self.tbl = AirtableTable(base_id, table, HEADERS_EXT) if self.enabled else None
@@ -245,10 +262,14 @@ class TrabajadoresLookup:
         out = []
         for r in data.get("records", []):
             f = r.get("fields", {})
-            out.append({
-                "dni": str(f.get(self.dni_field, "")).strip(),
-                "nombre": str(f.get(self.name_field, "")).strip() if self.name_field in f else "",
-            })
+            out.append(
+                {
+                    "dni": str(f.get(self.dni_field, "")).strip(),
+                    "nombre": str(f.get(self.name_field, "")).strip()
+                    if self.name_field in f
+                    else "",
+                }
+            )
         return out
 
 
@@ -260,9 +281,12 @@ lookup_repo = TrabajadoresLookup(EXT_BASE_ID or BASE_ID, EXT_TABLE, EXT_DNI_FIEL
 # APP 1: LLAMADOS DE ATENCIÓN
 # =========================
 
+
 def app_llamados_atencion():
     st.title("Control de llamados de atención")
-    st.caption("Busca por DNI en la tabla externa, trae el nombre y registra llamados en Airtable 'llamados'.")
+    st.caption(
+        "Busca por DNI en la tabla externa, trae el nombre y registra llamados en Airtable 'llamados'."
+    )
 
     # --- Config censurada ---
     with st.expander("Config (solo lectura)", expanded=False):
@@ -272,6 +296,7 @@ def app_llamados_atencion():
             if len(value) <= visible * 2:
                 return "*" * len(value)
             return f"{value[:visible]}{'*' * (len(value) - visible * 2)}{value[-visible:]}"
+
         st.write("🔒 Configuración APP1:")
         st.write("Base Llamados:", mask_value(BASE_ID))
         st.write("Tabla Llamados:", TBL_LLAMADOS)
@@ -309,7 +334,9 @@ def app_llamados_atencion():
             try:
                 sugs = lookup_repo.search_suggestions(dni_norm_typing, limit=10)
                 if sugs:
-                    labels = [f"{s['dni']} — {s.get('nombre') or 'sin nombre'}" for s in sugs]
+                    labels = [
+                        f"{s['dni']} — {s.get('nombre') or 'sin nombre'}" for s in sugs
+                    ]
                     map_label_to_dni = {lbl: s["dni"] for lbl, s in zip(labels, sugs)}
                     map_dni_to_name = {s["dni"]: s.get("nombre", "") for s in sugs}
 
@@ -324,7 +351,9 @@ def app_llamados_atencion():
                         selected_dni = map_label_to_dni[selected_label]
                         selected_name = map_dni_to_name.get(selected_dni, "")
 
-                    if st.button("Usar esta coincidencia", key="btn_usar_coinc_llamados"):
+                    if st.button(
+                        "Usar esta coincidencia", key="btn_usar_coinc_llamados"
+                    ):
                         st.session_state["dni_llamados"] = selected_dni
                         st.session_state["dni_input_value"] = selected_dni
                         st.session_state["nombre_ext_llamados"] = selected_name or None
@@ -365,7 +394,9 @@ def app_llamados_atencion():
             elif nombre_ext:
                 st.success(f"Nombre: **{nombre_ext}**")
             else:
-                st.warning("No se encontró nombre en la tabla externa. Puedes introducirlo manualmente abajo.")
+                st.warning(
+                    "No se encontró nombre en la tabla externa. Puedes introducirlo manualmente abajo."
+                )
 
         # Historial
         st.markdown("### 3) Historial de llamados (por DNI)")
@@ -377,12 +408,14 @@ def app_llamados_atencion():
                 rows = []
                 for r in llamados:
                     f = r.get("fields", {})
-                    rows.append({
-                        "Fecha y hora": f.get("fecha_hora", ""),
-                        "Motivo": f.get("motivo", ""),
-                        "Quién realizó": f.get("quien_realiza", ""),
-                        "Nombre (guardado)": f.get("nombre", ""),
-                    })
+                    rows.append(
+                        {
+                            "Fecha y hora": f.get("fecha_hora", ""),
+                            "Motivo": f.get("motivo", ""),
+                            "Quién realizó": f.get("quien_realiza", ""),
+                            "Nombre (guardado)": f.get("nombre", ""),
+                        }
+                    )
                 st.dataframe(rows, use_container_width=True, hide_index=True)
         except Exception as e:
             st.error(f"Error al cargar historial: {e}")
@@ -391,22 +424,39 @@ def app_llamados_atencion():
         st.markdown("### 4) Registrar nuevo llamado")
         with st.form("form_nuevo_llamado", clear_on_submit=True):
             if nombre_ext:
-                _ = st.text_input("Nombre del trabajador:", value=nombre_ext, disabled=True)
+                _ = st.text_input(
+                    "Nombre del trabajador:", value=nombre_ext, disabled=True
+                )
                 nombre_guardar = nombre_ext
             else:
-                nombre_guardar = st.text_input("Nombre del trabajador:", value="", placeholder="Escribe el nombre")
+                nombre_guardar = st.text_input(
+                    "Nombre del trabajador:",
+                    value="",
+                    placeholder="Escribe el nombre",
+                )
 
             now_local = datetime.now(tz.tzlocal())
-            fecha_hora = ui_datetime_input("Fecha y hora", value=now_local, key_prefix="llamado_dt")
-            motivo = st.text_area("Llamada de atención (motivo):", placeholder="Describe brevemente el motivo...", height=120)
-            quien_realiza = st.text_input("Nombre de quien realiza el llamado:", placeholder="Nombre y/o cargo")
+            fecha_hora = ui_datetime_input(
+                "Fecha y hora", value=now_local, key_prefix="llamado_dt"
+            )
+            motivo = st.text_area(
+                "Llamada de atención (motivo):",
+                placeholder="Describe brevemente el motivo...",
+                height=120,
+            )
+            quien_realiza = st.text_input(
+                "Nombre de quien realiza el llamado:",
+                placeholder="Nombre y/o cargo",
+            )
 
             submitted = st.form_submit_button("Guardar llamado")
             if submitted:
                 if not nombre_ext and not (nombre_guardar or "").strip():
                     st.warning("Por favor, introduce el nombre del trabajador.")
                 elif not (motivo or "").strip() or not (quien_realiza or "").strip():
-                    st.warning("Por favor, completa *Motivo* y *Nombre de quien realiza*.")
+                    st.warning(
+                        "Por favor, completa *Motivo* y *Nombre de quien realiza*."
+                    )
                 else:
                     if fecha_hora.tzinfo is None:
                         fecha_hora = fecha_hora.replace(tzinfo=tz.tzlocal())
@@ -414,17 +464,21 @@ def app_llamados_atencion():
                     try:
                         _ = llamados_repo.create_llamado(
                             dni=dni,
-                            nombre=(nombre_guardar or "").strip() if not nombre_ext else nombre_ext,
+                            nombre=(nombre_guardar or "").strip()
+                            if not nombre_ext
+                            else nombre_ext,
                             fecha_iso=fecha_iso,
                             motivo=(motivo or "").strip(),
-                            quien_realiza=(quien_realiza or "").strip()
+                            quien_realiza=(quien_realiza or "").strip(),
                         )
                         st.success("Llamado guardado correctamente.")
                         st.rerun()
                     except Exception as e:
                         st.error(f"No se pudo guardar el llamado: {e}")
     else:
-        st.info("No has seleccionado ningún DNI. Puedes ver el ranking general a continuación 👇")
+        st.info(
+            "No has seleccionado ningún DNI. Puedes ver el ranking general a continuación 👇"
+        )
 
     # Ranking
     st.markdown("---")
@@ -432,17 +486,27 @@ def app_llamados_atencion():
 
     colf1, colf2, colf3 = st.columns([1, 1, 1])
     with colf1:
-        start_date: Optional[date] = st.date_input("Desde (fecha)", value=None, key="rank_start_date")
+        start_date: Optional[date] = st.date_input(
+            "Desde (fecha)", value=None, key="rank_start_date"
+        )
     with colf2:
-        end_date: Optional[date] = st.date_input("Hasta (fecha)", value=None, key="rank_end_date")
+        end_date: Optional[date] = st.date_input(
+            "Hasta (fecha)", value=None, key="rank_end_date"
+        )
     with colf3:
-        top_n = st.number_input("Top N", min_value=1, max_value=1000, value=50, step=1, key="rank_top_n")
+        top_n = st.number_input(
+            "Top N", min_value=1, max_value=1000, value=50, step=1, key="rank_top_n"
+        )
 
     start_dt = end_dt = None
     if start_date:
-        start_dt = datetime.combine(start_date, dtime(0, 0)).replace(tzinfo=tz.tzlocal())
+        start_dt = datetime.combine(start_date, dtime(0, 0)).replace(
+            tzinfo=tz.tzlocal()
+        )
     if end_date:
-        end_dt = datetime.combine(end_date, dtime(23, 59, 59)).replace(tzinfo=tz.tzlocal())
+        end_dt = datetime.combine(end_date, dtime(23, 59, 59)).replace(
+            tzinfo=tz.tzlocal()
+        )
 
     try:
         all_records = llamados_repo.list_all(max_records=5000)
@@ -461,7 +525,10 @@ def app_llamados_atencion():
             if end_dt and (not dt_local or dt_local > end_dt):
                 continue
 
-            item = agg.get(dni_r, {"dni": dni_r, "nombre": f.get("nombre", ""), "count": 0, "ultimo": None})
+            item = agg.get(
+                dni_r,
+                {"dni": dni_r, "nombre": f.get("nombre", ""), "count": 0, "ultimo": None},
+            )
             item["count"] += 1
             if not item["nombre"] and f.get("nombre"):
                 item["nombre"] = f.get("nombre")
@@ -470,16 +537,26 @@ def app_llamados_atencion():
             agg[dni_r] = item
 
         ranking = list(agg.values())
-        ranking.sort(key=lambda x: (x["count"], x["ultimo"] or datetime.min.replace(tzinfo=tz.tzlocal())), reverse=True)
+        ranking.sort(
+            key=lambda x: (
+                x["count"],
+                x["ultimo"] or datetime.min.replace(tzinfo=tz.tzlocal()),
+            ),
+            reverse=True,
+        )
 
         rows_rank = []
         for it in ranking[:top_n]:
-            rows_rank.append({
-                "DNI": it["dni"],
-                "Nombre": it.get("nombre", ""),
-                "Total llamados": it["count"],
-                "Último llamado": it["ultimo"].strftime("%Y-%m-%d %H:%M") if it["ultimo"] else "",
-            })
+            rows_rank.append(
+                {
+                    "DNI": it["dni"],
+                    "Nombre": it.get("nombre", ""),
+                    "Total llamados": it["count"],
+                    "Último llamado": it["ultimo"].strftime("%Y-%m-%d %H:%M")
+                    if it["ultimo"]
+                    else "",
+                }
+            )
 
         if rows_rank:
             st.dataframe(rows_rank, use_container_width=True, hide_index=True)
@@ -493,11 +570,16 @@ def app_llamados_atencion():
 # APP 2: QUITAR HORAS
 # =========================
 
+
 @st.cache_data(show_spinner=False)
 def get_trabajadores_horas():
     """Lee plantilla usando la API secundaria de APP2."""
     try:
-        table = Table(HORAS_EXT_API_KEY or HORAS_API_KEY, HORAS_EXT_BASE_ID or HORAS_BASE_ID, HORAS_TRABAJADORES_TABLE_NAME)
+        table = Table(
+            HORAS_EXT_API_KEY or HORAS_API_KEY,
+            HORAS_EXT_BASE_ID or HORAS_BASE_ID,
+            HORAS_TRABAJADORES_TABLE_NAME,
+        )
         records = table.all()
     except HTTPError as e:
         st.error("Error leyendo tabla TRABAJADORES (plantilla) para quitar horas.")
@@ -507,11 +589,13 @@ def get_trabajadores_horas():
     trabajadores = []
     for r in records:
         f = r.get("fields", {})
-        trabajadores.append({
-            "record_id": r.get("id"),
-            "Nombre": f.get("nombre", ""),
-            "DNI": f.get("documentoDniONie", ""),
-        })
+        trabajadores.append(
+            {
+                "record_id": r.get("id"),
+                "Nombre": f.get("nombre", ""),
+                "DNI": f.get("documentoDniONie", ""),
+            }
+        )
     return trabajadores
 
 
@@ -536,17 +620,21 @@ def get_quitas_de_horas():
     rows = []
     for r in records:
         f = r.get("fields", {})
-        rows.append({
-            "record_id": r["id"],
-            "Fecha_Registro": f.get("Fecha_Registro", ""),
-            "Trabajador_Nombre": f.get("Trabajador_Nombre", ""),
-            "Trabajador_DNI": f.get("Trabajador_DNI", ""),
-            "Horas_Quitadas": f.get("Horas_Quitadas", None),
-        })
+        rows.append(
+            {
+                "record_id": r["id"],
+                "Fecha_Registro": f.get("Fecha_Registro", ""),
+                "Trabajador_Nombre": f.get("Trabajador_Nombre", ""),
+                "Trabajador_DNI": f.get("Trabajador_DNI", ""),
+                "Horas_Quitadas": f.get("Horas_Quitadas", None),
+            }
+        )
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        df["Fecha_Registro_dt"] = pd.to_datetime(df["Fecha_Registro"], errors="coerce")
+        df["Fecha_Registro_dt"] = pd.to_datetime(
+            df["Fecha_Registro"], errors="coerce"
+        )
     return df
 
 
@@ -564,12 +652,14 @@ def registrar_quita_horas(trabajador: Dict, horas: int):
 
 def app_quitar_horas():
     st.title("⏱️ Gestión de Horas Quitadas a Repartidores")
-    st.markdown("""
+    st.markdown(
+        """
 ### Funcionalidades:
 1. Buscar trabajador por DNI  
 2. Seleccionar cuántas horas quitar (1 a 9)  
 3. Ver tabla histórica con filtros  
-""")
+"""
+    )
 
     # Config debug (opcional)
     with st.expander("Config APP2 (solo lectura)", expanded=False):
@@ -579,12 +669,18 @@ def app_quitar_horas():
             if len(value) <= visible * 2:
                 return "*" * len(value)
             return f"{value[:visible]}{'*' * (len(value) - visible * 2)}{value[-visible:]}"
+
         st.write("Base horas:", mask_value(HORAS_BASE_ID))
         st.write("Tabla quitar horas:", HORAS_QUITAR_HORAS_TABLE_NAME)
         st.write("API principal horas:", mask_value(HORAS_API_KEY))
-        st.write("Base plantilla horas:", mask_value(HORAS_EXT_BASE_ID or HORAS_BASE_ID))
+        st.write(
+            "Base plantilla horas:", mask_value(HORAS_EXT_BASE_ID or HORAS_BASE_ID)
+        )
         st.write("Tabla plantilla horas:", HORAS_TRABAJADORES_TABLE_NAME)
-        st.write("API secundaria plantilla horas:", mask_value(HORAS_EXT_API_KEY or HORAS_API_KEY))
+        st.write(
+            "API secundaria plantilla horas:",
+            mask_value(HORAS_EXT_API_KEY or HORAS_API_KEY),
+        )
 
     if "trabajador_horas" not in st.session_state:
         st.session_state.trabajador_horas = None
@@ -595,7 +691,9 @@ def app_quitar_horas():
     col1, col2 = st.columns([1.5, 2])
 
     with col1:
-        dni_input = st.text_input("Escribe DNI", placeholder="Ej: 54398765A", key="dni_horas")
+        dni_input = st.text_input(
+            "Escribe DNI", placeholder="Ej: 54398765A", key="dni_horas"
+        )
 
     with col2:
         resultados = buscar_trabajadores_por_dni_horas(dni_input) if dni_input else []
@@ -606,8 +704,10 @@ def app_quitar_horas():
             default_index = 0
             if st.session_state.trabajador_horas:
                 for i, t in enumerate(resultados):
-                    if (t["Nombre"] == st.session_state.trabajador_horas["Nombre"]
-                            and t["DNI"] == st.session_state.trabajador_horas["DNI"]):
+                    if (
+                        t["Nombre"] == st.session_state.trabajador_horas["Nombre"]
+                        and t["DNI"] == st.session_state.trabajador_horas["DNI"]
+                    ):
                         default_index = i
                         break
 
@@ -617,12 +717,16 @@ def app_quitar_horas():
                 format_func=lambda i: opciones[i],
                 index=default_index,
                 disabled=st.session_state.selection_locked_horas,
-                key="radio_trabajador_horas"
+                key="radio_trabajador_horas",
             )
 
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
-                if st.button("✅ Seleccionar trabajador", disabled=st.session_state.selection_locked_horas, key="btn_sel_trab_horas"):
+                if st.button(
+                    "✅ Seleccionar trabajador",
+                    disabled=st.session_state.selection_locked_horas,
+                    key="btn_sel_trab_horas",
+                ):
                     st.session_state.trabajador_horas = resultados[idx]
                     st.session_state.selection_locked_horas = True
                     st.success(
@@ -630,7 +734,9 @@ def app_quitar_horas():
                     )
             with col_btn2:
                 if st.session_state.selection_locked_horas:
-                    if st.button("🔄 Cambiar trabajador", key="btn_cambiar_trab_horas"):
+                    if st.button(
+                        "🔄 Cambiar trabajador", key="btn_cambiar_trab_horas"
+                    ):
                         st.session_state.trabajador_horas = None
                         st.session_state.selection_locked_horas = False
                         st.experimental_rerun()
@@ -640,11 +746,13 @@ def app_quitar_horas():
 
     if st.session_state.trabajador_horas:
         t = st.session_state.trabajador_horas
-        st.markdown(f"""
+        st.markdown(
+            f"""
 ### Trabajador seleccionado:
 **Nombre:** {t['Nombre']}  
 **DNI:** {t['DNI']}
-""")
+"""
+        )
 
     st.divider()
 
@@ -682,12 +790,52 @@ def app_quitar_horas():
 
         df_f = df.copy()
         if f_dni:
-            df_f = df_f[df_f["Trabajador_DNI"].str.contains(f_dni, case=False, na=False)]
+            df_f = df_f[
+                df_f["Trabajador_DNI"].str.contains(f_dni, case=False, na=False)
+            ]
         if f_nombre:
-            df_f = df_f[df_f["Trabajador_Nombre"].str.contains(f_nombre, case=False, na=False)]
+            df_f = df_f[
+                df_f["Trabajador_Nombre"].str.contains(
+                    f_nombre, case=False, na=False
+                )
+            ]
 
-        df_f = df_f.sort_values("Fecha_Registro_dt", ascending=False)
-        st.dataframe(df_f, use_container_width=True)
+        # 🔹 NUEVO: agrupar por trabajador y sumar horas
+        if not df_f.empty:
+            df_grouped = (
+                df_f.groupby(
+                    ["Trabajador_DNI", "Trabajador_Nombre"], as_index=False
+                )
+                .agg(
+                    {
+                        "Horas_Quitadas": "sum",
+                        "Fecha_Registro_dt": "max",  # última vez que se le quitó
+                    }
+                )
+            )
+
+            df_grouped = df_grouped.sort_values(
+                ["Horas_Quitadas", "Fecha_Registro_dt"], ascending=[False, False]
+            )
+
+            df_grouped = df_grouped.rename(
+                columns={
+                    "Horas_Quitadas": "Horas_Totales_Quitadas",
+                    "Fecha_Registro_dt": "Ultima_Fecha_Registro",
+                }
+            )
+
+            st.markdown("#### 📊 Horas totales por trabajador")
+            st.dataframe(df_grouped, use_container_width=True, hide_index=True)
+
+            # (Opcional) detalle por registro, por si lo quieres ver
+            with st.expander("Ver registros individuales (detalle bruto)", expanded=False):
+                df_f = df_f.sort_values(
+                    "Fecha_Registro_dt", ascending=False
+                )
+                st.dataframe(df_f, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay registros para los filtros seleccionados.")
 
 
 # =========================
