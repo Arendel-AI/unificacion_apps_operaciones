@@ -739,7 +739,7 @@ def app_quitar_horas():
                     ):
                         st.session_state.trabajador_horas = None
                         st.session_state.selection_locked_horas = False
-                        st.experimental_rerun()
+                        st.rerun()
         else:
             if dni_input:
                 st.info("No hay coincidencias.")
@@ -773,6 +773,43 @@ def app_quitar_horas():
                 st.success(f"Se registraron **{horas} horas** quitadas.")
                 get_quitas_de_horas.clear()
 
+    # ------------------------------------------
+    # 🔄 2.1 - CORRECCIÓN (DEVOLVER HORAS)
+    # ------------------------------------------
+    st.markdown("### 🔄 Corrección de horas (devolver)")
+
+    if not st.session_state.trabajador_horas:
+        st.info("Selecciona un trabajador primero para poder corregir horas.")
+    else:
+        with st.form("form_devolver_horas"):
+            colc1, colc2 = st.columns([1, 1])
+
+            with colc1:
+                horas_devolver = st.selectbox(
+                    "Horas a devolver",
+                    list(range(1, 10)),
+                    key="select_horas_devolver"
+                )
+
+            with colc2:
+                corregir = st.form_submit_button("↩️ Devolver horas")
+
+            if corregir:
+                # Guardamos como valor negativo para que el total se corrija automáticamente
+                registrar_quita_horas(
+                    st.session_state.trabajador_horas,
+                    -horas_devolver
+                )
+
+                st.success(
+                    f"Se han DEVUELTO **{horas_devolver} horas** al trabajador "
+                    f"(guardado como *-{horas_devolver}*)."
+                )
+
+                # Limpiar cache y refrescar
+                get_quitas_de_horas.clear()
+                st.rerun()
+
     st.divider()
 
     st.subheader("3️⃣ Histórico de horas quitadas")
@@ -800,7 +837,7 @@ def app_quitar_horas():
                 )
             ]
 
-        # 🔹 NUEVO: agrupar por trabajador y sumar horas
+        # 🔹 Agrupar por trabajador y sumar horas
         if not df_f.empty:
             df_grouped = (
                 df_f.groupby(
@@ -809,7 +846,7 @@ def app_quitar_horas():
                 .agg(
                     {
                         "Horas_Quitadas": "sum",
-                        "Fecha_Registro_dt": "max",  # última vez que se le quitó
+                        "Fecha_Registro_dt": "max",  # última vez que se le quitó/devolvió
                     }
                 )
             )
@@ -828,7 +865,7 @@ def app_quitar_horas():
             st.markdown("#### 📊 Horas totales por trabajador")
             st.dataframe(df_grouped, use_container_width=True, hide_index=True)
 
-            # (Opcional) detalle por registro, por si lo quieres ver
+            # Detalle por registro
             with st.expander("Ver registros individuales (detalle bruto)", expanded=False):
                 df_f = df_f.sort_values(
                     "Fecha_Registro_dt", ascending=False
