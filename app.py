@@ -3,6 +3,7 @@ import json
 import time as time_mod
 from datetime import datetime, date, time as dtime
 from dateutil import tz
+from dateutil.relativedelta import relativedelta  # (no imprescindible ahora, pero ok)
 from typing import Optional, List, Dict
 
 import requests
@@ -288,7 +289,6 @@ def app_llamados_atencion():
         "Busca por DNI en la tabla externa, trae el nombre y registra llamados en Airtable 'llamados'."
     )
 
-    # --- Config censurada ---
     with st.expander("Config (solo lectura)", expanded=False):
         def mask_value(value: str, visible: int = 4) -> str:
             if not value:
@@ -309,7 +309,6 @@ def app_llamados_atencion():
             st.write("Campo DNI externo:", EXT_DNI_FIELD)
             st.write("Campo nombre externo:", EXT_NAME_FIELD)
 
-    # ---------- BÚSQUEDA + AUTOCOMPLETADO ----------
     st.markdown("### 1) Buscar trabajador por documento de identidad")
 
     dni_prefill = st.session_state.get("dni_input_value", "")
@@ -398,7 +397,6 @@ def app_llamados_atencion():
                     "No se encontró nombre en la tabla externa. Puedes introducirlo manualmente abajo."
                 )
 
-        # Historial
         st.markdown("### 3) Historial de llamados (por DNI)")
         try:
             llamados = llamados_repo.list_by_dni(dni, max_records=500)
@@ -420,7 +418,6 @@ def app_llamados_atencion():
         except Exception as e:
             st.error(f"Error al cargar historial: {e}")
 
-        # Formulario nuevo llamado
         st.markdown("### 4) Registrar nuevo llamado")
         with st.form("form_nuevo_llamado", clear_on_submit=True):
             if nombre_ext:
@@ -480,7 +477,6 @@ def app_llamados_atencion():
             "No has seleccionado ningún DNI. Puedes ver el ranking general a continuación 👇"
         )
 
-    # Ranking
     st.markdown("---")
     st.markdown("###  Ranking de trabajadores por número de llamados")
 
@@ -627,27 +623,54 @@ def get_quitas_de_horas():
                 "Trabajador_Nombre": f.get("Trabajador_Nombre", ""),
                 "Trabajador_DNI": f.get("Trabajador_DNI", ""),
                 "Horas_Quitadas": f.get("Horas_Quitadas", None),
+                "Responsable": f.get("Responsable", ""),  # ✅ NUEVO
             }
         )
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        df["Fecha_Registro_dt"] = pd.to_datetime(
-            df["Fecha_Registro"], errors="coerce"
-        )
+        df["Fecha_Registro_dt"] = pd.to_datetime(df["Fecha_Registro"], errors="coerce")
+        df["Month_Key"] = df["Fecha_Registro_dt"].dt.strftime("%Y-%m")
     return df
 
 
-def registrar_quita_horas(trabajador: Dict, horas: int):
+def registrar_quita_horas(trabajador: Dict, horas: int, responsable: str):
     """Escribe en quitar_horas_trabajadores usando la API principal de APP2."""
     table = Table(HORAS_API_KEY, HORAS_BASE_ID, HORAS_QUITAR_HORAS_TABLE_NAME)
     fields = {
         "Trabajador_Nombre": trabajador["Nombre"],
         "Trabajador_DNI": trabajador["DNI"],
         "Horas_Quitadas": horas,
+        "Responsable": (responsable or "").strip(),  # ✅ NUEVO
         "Fecha_Registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     table.create(fields)
+
+
+def _render_resumen_y_detalle(df_in: pd.DataFrame, titulo: str):
+    if df_in.empty:
+        st.info("No hay registros para los filtros seleccionados.")
+        return
+
+    df_grouped = (
+        df_in.groupby(["Trabajador_DNI", "Trabajador_Nombre"], as_index=False)
+        .agg({"Horas_Quitadas": "sum", "Fecha_Registro_dt": "max"})
+        .sort_values(["Horas_Quitadas", "Fecha_Registro_dt"], ascending=[False, False])
+        .rename(columns={
+            "Horas_Quitadas": "Horas_Totales_Quitadas",
+            "Fecha_Registro_dt": "Ultima_Fecha_Registro",
+        })
+    )
+
+    st.markdown(titulo)
+    st.dataframe(df_grouped, use_container_width=True, hide_index=True)
+
+    with st.expander("Ver registros individuales (detalle) — SOLO LECTURA", expanded=False):
+        # Mostrar columnas ordenadas, incluyendo Responsable
+        cols = ["Fecha_Registro_dt", "Trabajador_Nombre", "Trabajador_DNI", "Horas_Quitadas", "Responsable"]
+        cols = [c for c in cols if c in df_in.columns]
+        df_det = df_in[cols].sort_values("Fecha_Registro_dt", ascending=False)
+        st.dataframe(df_det, use_container_width=True, hide_index=True)
 
 
 def app_quitar_horas():
@@ -657,43 +680,30 @@ def app_quitar_horas():
 ### Funcionalidades:
 1. Buscar trabajador por DNI  
 2. Seleccionar cuántas horas quitar (1 a 9)  
-3. Ver tabla histórica con filtros  
+3. Ver resumen del mes actual + histórico con selector de meses  
 """
     )
-
-    # Config debug (opcional)
-    with st.expander("Config APP2 (solo lectura)", expanded=False):
-        def mask_value(value: str, visible: int = 4) -> str:
-            if not value:
-                return "—"
-            if len(value) <= visible * 2:
-                return "*" * len(value)
-            return f"{value[:visible]}{'*' * (len(value) - visible * 2)}{value[-visible:]}"
-
-        st.write("Base horas:", mask_value(HORAS_BASE_ID))
-        st.write("Tabla quitar horas:", HORAS_QUITAR_HORAS_TABLE_NAME)
-        st.write("API principal horas:", mask_value(HORAS_API_KEY))
-        st.write(
-            "Base plantilla horas:", mask_value(HORAS_EXT_BASE_ID or HORAS_BASE_ID)
-        )
-        st.write("Tabla plantilla horas:", HORAS_TRABAJADORES_TABLE_NAME)
-        st.write(
-            "API secundaria plantilla horas:",
-            mask_value(HORAS_EXT_API_KEY or HORAS_API_KEY),
-        )
 
     if "trabajador_horas" not in st.session_state:
         st.session_state.trabajador_horas = None
     if "selection_locked_horas" not in st.session_state:
         st.session_state.selection_locked_horas = False
 
+    # ✅ NUEVO: Responsable obligatorio
+    st.subheader("👤 Responsable de la acción")
+    responsable = st.text_input(
+        "Nombre del responsable",
+        placeholder="Ej: Juan José / RRHH / Supervisor",
+        key="responsable_horas",
+    ).strip()
+
+    st.divider()
+
     st.subheader("1️⃣ Buscar trabajador")
     col1, col2 = st.columns([1.5, 2])
 
     with col1:
-        dni_input = st.text_input(
-            "Escribe DNI", placeholder="Ej: 54398765A", key="dni_horas"
-        )
+        dni_input = st.text_input("Escribe DNI", placeholder="Ej: 54398765A", key="dni_horas")
 
     with col2:
         resultados = buscar_trabajadores_por_dni_horas(dni_input) if dni_input else []
@@ -722,21 +732,13 @@ def app_quitar_horas():
 
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
-                if st.button(
-                    "✅ Seleccionar trabajador",
-                    disabled=st.session_state.selection_locked_horas,
-                    key="btn_sel_trab_horas",
-                ):
+                if st.button("✅ Seleccionar trabajador", disabled=st.session_state.selection_locked_horas, key="btn_sel_trab_horas"):
                     st.session_state.trabajador_horas = resultados[idx]
                     st.session_state.selection_locked_horas = True
-                    st.success(
-                        f"Seleccionado: **{resultados[idx]['Nombre']} — {resultados[idx]['DNI']}**"
-                    )
+                    st.success(f"Seleccionado: **{resultados[idx]['Nombre']} — {resultados[idx]['DNI']}**")
             with col_btn2:
                 if st.session_state.selection_locked_horas:
-                    if st.button(
-                        "🔄 Cambiar trabajador", key="btn_cambiar_trab_horas"
-                    ):
+                    if st.button("🔄 Cambiar trabajador", key="btn_cambiar_trab_horas"):
                         st.session_state.trabajador_horas = None
                         st.session_state.selection_locked_horas = False
                         st.rerun()
@@ -746,13 +748,7 @@ def app_quitar_horas():
 
     if st.session_state.trabajador_horas:
         t = st.session_state.trabajador_horas
-        st.markdown(
-            f"""
-### Trabajador seleccionado:
-**Nombre:** {t['Nombre']}  
-**DNI:** {t['DNI']}
-"""
-        )
+        st.markdown(f"### Trabajador seleccionado:\n**Nombre:** {t['Nombre']}  \n**DNI:** {t['DNI']}")
 
     st.divider()
 
@@ -769,13 +765,13 @@ def app_quitar_horas():
                 guardar = st.form_submit_button("💾 Guardar")
 
             if guardar:
-                registrar_quita_horas(st.session_state.trabajador_horas, horas)
-                st.success(f"Se registraron **{horas} horas** quitadas.")
-                get_quitas_de_horas.clear()
+                if not responsable:
+                    st.warning("Debes indicar el responsable antes de guardar.")
+                else:
+                    registrar_quita_horas(st.session_state.trabajador_horas, horas, responsable)
+                    st.success(f"Se registraron **{horas} horas** quitadas por **{responsable}**.")
+                    get_quitas_de_horas.clear()
 
-    # ------------------------------------------
-    # 🔄 2.1 - CORRECCIÓN (DEVOLVER HORAS)
-    # ------------------------------------------
     st.markdown("### 🔄 Corrección de horas (devolver)")
 
     if not st.session_state.trabajador_horas:
@@ -783,96 +779,94 @@ def app_quitar_horas():
     else:
         with st.form("form_devolver_horas"):
             colc1, colc2 = st.columns([1, 1])
-
             with colc1:
-                horas_devolver = st.selectbox(
-                    "Horas a devolver",
-                    list(range(1, 10)),
-                    key="select_horas_devolver"
-                )
-
+                horas_devolver = st.selectbox("Horas a devolver", list(range(1, 10)), key="select_horas_devolver")
             with colc2:
                 corregir = st.form_submit_button("↩️ Devolver horas")
 
             if corregir:
-                # Guardamos como valor negativo para que el total se corrija automáticamente
-                registrar_quita_horas(
-                    st.session_state.trabajador_horas,
-                    -horas_devolver
-                )
-
-                st.success(
-                    f"Se han DEVUELTO **{horas_devolver} horas** al trabajador "
-                    f"(guardado como *-{horas_devolver}*)."
-                )
-
-                # Limpiar cache y refrescar
-                get_quitas_de_horas.clear()
-                st.rerun()
+                if not responsable:
+                    st.warning("Debes indicar el responsable antes de corregir.")
+                else:
+                    registrar_quita_horas(st.session_state.trabajador_horas, -horas_devolver, responsable)
+                    st.success(f"Se han DEVUELTO **{horas_devolver} horas** por **{responsable}** (guardado como *-{horas_devolver}*).")
+                    get_quitas_de_horas.clear()
+                    st.rerun()
 
     st.divider()
 
-    st.subheader("3️⃣ Histórico de horas quitadas")
+    # =========================
+    # 3) MES ACTUAL (EN CURSO)
+    # =========================
+    st.subheader("3️⃣ Horas en curso (mes actual)")
 
     df = get_quitas_de_horas()
-
     if df.empty:
         st.info("No hay registros aún.")
+        return
+
+    now_local = datetime.now(tz.tzlocal())
+    mes_actual = now_local.strftime("%Y-%m")
+
+    c1, c2 = st.columns([2, 2])
+    with c1:
+        f_dni = st.text_input("Filtrar por DNI", key="filtro_dni_horas_mes_actual")
+    with c2:
+        f_nombre = st.text_input("Filtrar por nombre", key="filtro_nombre_horas_mes_actual")
+
+    df_mes = df[df["Month_Key"] == mes_actual].copy()
+    if f_dni:
+        df_mes = df_mes[df_mes["Trabajador_DNI"].str.contains(f_dni, case=False, na=False)]
+    if f_nombre:
+        df_mes = df_mes[df_mes["Trabajador_Nombre"].str.contains(f_nombre, case=False, na=False)]
+
+    if df_mes.empty:
+        st.info(f"No hay registros para el mes actual ({mes_actual}).")
     else:
-        c1, c2 = st.columns([2, 2])
-        with c1:
-            f_dni = st.text_input("Filtrar por DNI", key="filtro_dni_horas")
-        with c2:
-            f_nombre = st.text_input("Filtrar por nombre", key="filtro_nombre_horas")
+        _render_resumen_y_detalle(df_mes, f"#### 📊 Resumen mes actual ({mes_actual})")
 
-        df_f = df.copy()
-        if f_dni:
-            df_f = df_f[
-                df_f["Trabajador_DNI"].str.contains(f_dni, case=False, na=False)
-            ]
-        if f_nombre:
-            df_f = df_f[
-                df_f["Trabajador_Nombre"].str.contains(
-                    f_nombre, case=False, na=False
-                )
-            ]
+    st.divider()
 
-        # 🔹 Agrupar por trabajador y sumar horas
-        if not df_f.empty:
-            df_grouped = (
-                df_f.groupby(
-                    ["Trabajador_DNI", "Trabajador_Nombre"], as_index=False
-                )
-                .agg(
-                    {
-                        "Horas_Quitadas": "sum",
-                        "Fecha_Registro_dt": "max",  # última vez que se le quitó/devolvió
-                    }
-                )
-            )
+    # =========================
+    # 4) HISTÓRICO (SELECTOR MES)
+    # =========================
+    st.subheader("📚 Histórico de horas (meses anteriores)")
+    st.caption("🔒 Solo lectura: el histórico no se puede modificar desde el dashboard.")
 
-            df_grouped = df_grouped.sort_values(
-                ["Horas_Quitadas", "Fecha_Registro_dt"], ascending=[False, False]
-            )
+    meses_disponibles = sorted(
+        [m for m in df["Month_Key"].dropna().unique().tolist() if isinstance(m, str)],
+        reverse=True
+    )
+    meses_disponibles = [m for m in meses_disponibles if m != mes_actual]
 
-            df_grouped = df_grouped.rename(
-                columns={
-                    "Horas_Quitadas": "Horas_Totales_Quitadas",
-                    "Fecha_Registro_dt": "Ultima_Fecha_Registro",
-                }
-            )
+    if not meses_disponibles:
+        st.info("Todavía no hay meses anteriores con registros.")
+        return
 
-            st.markdown("#### 📊 Horas totales por trabajador")
-            st.dataframe(df_grouped, use_container_width=True, hide_index=True)
+    mes_sel = st.selectbox(
+        "Selecciona mes (YYYY-MM)",
+        options=meses_disponibles,
+        index=0,
+        key="hist_mes_selector_unico"
+    )
+    st.caption(f"Mes seleccionado: **{mes_sel}**")
 
-            # Detalle por registro
-            with st.expander("Ver registros individuales (detalle bruto)", expanded=False):
-                df_f = df_f.sort_values(
-                    "Fecha_Registro_dt", ascending=False
-                )
-                st.dataframe(df_f, use_container_width=True, hide_index=True)
-        else:
-            st.info("No hay registros para los filtros seleccionados.")
+    c3, c4 = st.columns([2, 2])
+    with c3:
+        f_dni_h = st.text_input("Filtrar por DNI (histórico)", key="filtro_dni_horas_hist")
+    with c4:
+        f_nombre_h = st.text_input("Filtrar por nombre (histórico)", key="filtro_nombre_horas_hist")
+
+    df_hist = df[df["Month_Key"] == mes_sel].copy()
+    if f_dni_h:
+        df_hist = df_hist[df_hist["Trabajador_DNI"].str.contains(f_dni_h, case=False, na=False)]
+    if f_nombre_h:
+        df_hist = df_hist[df_hist["Trabajador_Nombre"].str.contains(f_nombre_h, case=False, na=False)]
+
+    if df_hist.empty:
+        st.info("No hay registros para ese mes / filtros.")
+    else:
+        _render_resumen_y_detalle(df_hist, f"#### 📊 Resumen histórico ({mes_sel})")
 
 
 # =========================
