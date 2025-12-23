@@ -56,6 +56,11 @@ HORAS_QUITAR_HORAS_TABLE_NAME = get_secret(
     "HORAS_QUITAR_HORAS_TABLE_NAME", "quitar_horas_trabajadores"
 )
 
+# Campo en Airtable (tabla quitar_horas_trabajadores) tipo Date
+HORAS_FIELD_FECHA_NO_TRABAJADA = get_secret(
+    "HORAS_FIELD_FECHA_NO_TRABAJADA", "Fecha_No_Trabajada"
+)
+
 # API SECUNDARIA (plantilla app2)
 HORAS_EXT_API_KEY = get_secret("HORAS_EXT_AIRTABLE_API_KEY")
 HORAS_EXT_BASE_ID = get_secret("HORAS_EXT_AIRTABLE_BASE_ID", HORAS_BASE_ID or "")
@@ -290,6 +295,7 @@ def app_llamados_atencion():
     )
 
     with st.expander("Config (solo lectura)", expanded=False):
+
         def mask_value(value: str, visible: int = 4) -> str:
             if not value:
                 return "—"
@@ -620,10 +626,11 @@ def get_quitas_de_horas():
             {
                 "record_id": r["id"],
                 "Fecha_Registro": f.get("Fecha_Registro", ""),
+                "Fecha_No_Trabajada": f.get(HORAS_FIELD_FECHA_NO_TRABAJADA, ""),  # ✅ NUEVO
                 "Trabajador_Nombre": f.get("Trabajador_Nombre", ""),
                 "Trabajador_DNI": f.get("Trabajador_DNI", ""),
                 "Horas_Quitadas": f.get("Horas_Quitadas", None),
-                "Responsable": f.get("Responsable", ""),  # ✅ NUEVO
+                "Responsable": f.get("Responsable", ""),
             }
         )
 
@@ -634,15 +641,19 @@ def get_quitas_de_horas():
     return df
 
 
-def registrar_quita_horas(trabajador: Dict, horas: int, responsable: str):
+def registrar_quita_horas(trabajador: Dict, horas: int, responsable: str, fecha_no_trabajada: date):
     """Escribe en quitar_horas_trabajadores usando la API principal de APP2."""
+    if not fecha_no_trabajada:
+        raise ValueError("La fecha no trabajada es obligatoria.")
+
     table = Table(HORAS_API_KEY, HORAS_BASE_ID, HORAS_QUITAR_HORAS_TABLE_NAME)
     fields = {
         "Trabajador_Nombre": trabajador["Nombre"],
         "Trabajador_DNI": trabajador["DNI"],
-        "Horas_Quitadas": horas,
-        "Responsable": (responsable or "").strip(),  # ✅ NUEVO
+        "Horas_Quitadas": int(horas),
+        "Responsable": (responsable or "").strip(),
         "Fecha_Registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        HORAS_FIELD_FECHA_NO_TRABAJADA: fecha_no_trabajada.strftime("%Y-%m-%d"),  # ✅ Date
     }
     table.create(fields)
 
@@ -666,8 +677,14 @@ def _render_resumen_y_detalle(df_in: pd.DataFrame, titulo: str):
     st.dataframe(df_grouped, use_container_width=True, hide_index=True)
 
     with st.expander("Ver registros individuales (detalle) — SOLO LECTURA", expanded=False):
-        # Mostrar columnas ordenadas, incluyendo Responsable
-        cols = ["Fecha_Registro_dt", "Trabajador_Nombre", "Trabajador_DNI", "Horas_Quitadas", "Responsable"]
+        cols = [
+            "Fecha_Registro_dt",
+            "Fecha_No_Trabajada",  # ✅ NUEVO
+            "Trabajador_Nombre",
+            "Trabajador_DNI",
+            "Horas_Quitadas",
+            "Responsable",
+        ]
         cols = [c for c in cols if c in df_in.columns]
         df_det = df_in[cols].sort_values("Fecha_Registro_dt", ascending=False)
         st.dataframe(df_det, use_container_width=True, hide_index=True)
@@ -679,8 +696,9 @@ def app_quitar_horas():
         """
 ### Funcionalidades:
 1. Buscar trabajador por DNI  
-2. Seleccionar cuántas horas quitar (1 a 9)  
-3. Ver resumen del mes actual + histórico con selector de meses  
+2. Registrar horas quitadas con **fecha no trabajada (obligatoria)**  
+3. Corregir horas (devolver) también con **fecha no trabajada (obligatoria)**  
+4. Ver resumen del mes actual + histórico con selector de meses  
 """
     )
 
@@ -689,7 +707,6 @@ def app_quitar_horas():
     if "selection_locked_horas" not in st.session_state:
         st.session_state.selection_locked_horas = False
 
-    # ✅ NUEVO: Responsable obligatorio
     st.subheader("👤 Responsable de la acción")
     responsable = st.text_input(
         "Nombre del responsable",
@@ -698,7 +715,6 @@ def app_quitar_horas():
     ).strip()
 
     st.divider()
-
     st.subheader("1️⃣ Buscar trabajador")
     col1, col2 = st.columns([1.5, 2])
 
@@ -751,26 +767,39 @@ def app_quitar_horas():
         st.markdown(f"### Trabajador seleccionado:\n**Nombre:** {t['Nombre']}  \n**DNI:** {t['DNI']}")
 
     st.divider()
-
     st.subheader("2️⃣ Registrar horas quitadas")
 
     if not st.session_state.trabajador_horas:
         st.info("Selecciona un trabajador primero.")
     else:
         with st.form("form_horas_quitar"):
-            colh1, colh2 = st.columns([1, 1])
+            colh1, colh2, colh3 = st.columns([1, 1, 1])
             with colh1:
                 horas = st.selectbox("Horas a quitar", list(range(1, 10)))
             with colh2:
+                fecha_no_trabajada = st.date_input(
+                    "Fecha no trabajada (obligatoria)",
+                    value=date.today(),
+                    key="fecha_no_trabajada_quitar",
+                )
+            with colh3:
                 guardar = st.form_submit_button("💾 Guardar")
 
             if guardar:
                 if not responsable:
                     st.warning("Debes indicar el responsable antes de guardar.")
+                elif not fecha_no_trabajada:
+                    st.warning("Debes indicar la fecha no trabajada.")
                 else:
-                    registrar_quita_horas(st.session_state.trabajador_horas, horas, responsable)
+                    registrar_quita_horas(
+                        st.session_state.trabajador_horas,
+                        horas,
+                        responsable,
+                        fecha_no_trabajada,
+                    )
                     st.success(f"Se registraron **{horas} horas** quitadas por **{responsable}**.")
                     get_quitas_de_horas.clear()
+                    st.rerun()
 
     st.markdown("### 🔄 Corrección de horas (devolver)")
 
@@ -778,18 +807,33 @@ def app_quitar_horas():
         st.info("Selecciona un trabajador primero para poder corregir horas.")
     else:
         with st.form("form_devolver_horas"):
-            colc1, colc2 = st.columns([1, 1])
+            colc1, colc2, colc3 = st.columns([1, 1, 1])
             with colc1:
                 horas_devolver = st.selectbox("Horas a devolver", list(range(1, 10)), key="select_horas_devolver")
             with colc2:
+                fecha_no_trabajada_dev = st.date_input(
+                    "Fecha no trabajada (obligatoria)",
+                    value=date.today(),
+                    key="fecha_no_trabajada_devolver",
+                )
+            with colc3:
                 corregir = st.form_submit_button("↩️ Devolver horas")
 
             if corregir:
                 if not responsable:
                     st.warning("Debes indicar el responsable antes de corregir.")
+                elif not fecha_no_trabajada_dev:
+                    st.warning("Debes indicar la fecha no trabajada.")
                 else:
-                    registrar_quita_horas(st.session_state.trabajador_horas, -horas_devolver, responsable)
-                    st.success(f"Se han DEVUELTO **{horas_devolver} horas** por **{responsable}** (guardado como *-{horas_devolver}*).")
+                    registrar_quita_horas(
+                        st.session_state.trabajador_horas,
+                        -horas_devolver,
+                        responsable,
+                        fecha_no_trabajada_dev,
+                    )
+                    st.success(
+                        f"Se han DEVUELTO **{horas_devolver} horas** por **{responsable}** (guardado como *-{horas_devolver}*)."
+                    )
                     get_quitas_de_horas.clear()
                     st.rerun()
 
