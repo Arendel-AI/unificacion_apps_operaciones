@@ -1,15 +1,19 @@
 import os
 import json
 import time as time_mod
-from datetime import datetime, date, time as dtime
+from datetime import datetime, date
 from dateutil import tz
 from typing import Optional, List, Dict, Any
 
 import requests
 import streamlit as st
 import pandas as pd
-from pyairtable import Table
+from pyairtable import Table, Api
 from requests.exceptions import HTTPError
+
+# Cloudinary (se mantiene como estaba; solo funciona si configuras CLOUDINARY_*)
+import cloudinary
+import cloudinary.uploader
 
 # =========================
 # CONFIG GLOBAL
@@ -42,6 +46,9 @@ EXT_TABLE = get_secret("EXT_AIRTABLE_TABLE", "plantilla")
 EXT_DNI_FIELD = get_secret("EXT_DNI_FIELD", "documentoDniONie")
 EXT_NAME_FIELD = get_secret("EXT_NAME_FIELD", "nombre")
 
+# ✅ NUEVO: view para APP1 (lectura en plantilla)
+EXT_VIEW = get_secret("EXT_VIEW", "")
+
 # ============================================================
 # SECRETS APP 2 — QUITAR HORAS
 # ============================================================
@@ -57,6 +64,9 @@ HORAS_EXT_BASE_ID = get_secret("HORAS_EXT_AIRTABLE_BASE_ID", HORAS_BASE_ID or ""
 HORAS_TRABAJADORES_TABLE_NAME = get_secret(
     "HORAS_TRABAJADORES_TABLE_NAME", "plantilla"
 )
+
+# ✅ NUEVO: view para APP2 (lectura en plantilla)
+HORAS_EXT_VIEW = get_secret("HORAS_EXT_VIEW", "")
 
 # ✅ Campo Date en Airtable (tabla quitar_horas_trabajadores) tipo Date
 HORAS_FIELD_FECHA_NO_TRABAJADA = get_secret(
@@ -146,18 +156,6 @@ def airtable_request(method: str, url: str, headers: dict, params=None, data=Non
                 raise
             time_mod.sleep(1.2 * attempt)
 
-def parse_iso(dt_str: str) -> Optional[datetime]:
-    if not dt_str:
-        return None
-    try:
-        if dt_str.endswith("Z"):
-            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        else:
-            dt = datetime.fromisoformat(dt_str)
-        return dt.astimezone(tz.tzlocal())
-    except Exception:
-        return None
-
 def ui_datetime_input(label: str, value: datetime, key_prefix: str = "dt") -> datetime:
     dt_input = getattr(st, "datetime_input", None)
     if callable(dt_input):
@@ -213,35 +211,25 @@ class LlamadosRepo:
                 break
         return resultados[:max_records]
 
-    def list_all(self, max_records=5000):
-        params = {"pageSize": 100}
-        resultados, offset = [], None
-        while True:
-            if offset:
-                params["offset"] = offset
-            data = self.tbl.list(params)
-            resultados.extend(data.get("records", []))
-            offset = data.get("offset")
-            if not offset or len(resultados) >= max_records:
-                break
-        return resultados[:max_records]
-
     def create_llamado(self, dni: str, nombre: str, fecha_iso: str, motivo: str, quien_realiza: str):
         fields = {"dni": dni, "nombre": nombre, "fecha_hora": fecha_iso, "motivo": motivo, "quien_realiza": quien_realiza}
         return self.tbl.create(fields)
 
 class TrabajadoresLookup:
-    def __init__(self, base_id: str, table: str, dni_field: str, name_field: str):
+    def __init__(self, base_id: str, table: str, dni_field: str, name_field: str, view: str = ""):
         self.enabled = bool(table)
         self.tbl = AirtableTable(base_id, table, HEADERS_EXT) if self.enabled else None
         self.dni_field = dni_field
         self.name_field = name_field
+        self.view = (view or "").strip()
 
     def get_nombre_by_dni(self, dni: str) -> Optional[str]:
         if not self.enabled:
             return None
         formula = f"{{{self.dni_field}}}='{dni}'"
         params = {"filterByFormula": formula, "pageSize": 1}
+        if self.view:
+            params["view"] = self.view
         data = self.tbl.list(params)
         records = data.get("records", [])
         if not records:
@@ -259,6 +247,9 @@ class TrabajadoresLookup:
             "sort[0][field]": self.dni_field,
             "sort[0][direction]": "asc",
         }
+        if self.view:
+            params["view"] = self.view
+
         data = self.tbl.list(params)
         out = []
         for r in data.get("records", []):
@@ -270,7 +261,7 @@ class TrabajadoresLookup:
         return out
 
 llamados_repo = LlamadosRepo(BASE_ID, TBL_LLAMADOS)
-lookup_repo = TrabajadoresLookup(EXT_BASE_ID or BASE_ID, EXT_TABLE, EXT_DNI_FIELD, EXT_NAME_FIELD)
+lookup_repo = TrabajadoresLookup(EXT_BASE_ID or BASE_ID, EXT_TABLE, EXT_DNI_FIELD, EXT_NAME_FIELD, view=EXT_VIEW)
 
 # =========================
 # APP 1: LLAMADOS DE ATENCIÓN
@@ -278,7 +269,7 @@ lookup_repo = TrabajadoresLookup(EXT_BASE_ID or BASE_ID, EXT_TABLE, EXT_DNI_FIEL
 
 def app_llamados_atencion():
     st.title("Control de llamados de atención")
-    st.caption("Busca por DNI en la tabla externa, trae el nombre y registra llamados en Airtable 'llamados'.")
+    st.caption("Busca por DNI en la tabla externa (plantilla), trae el nombre y registra llamados en Airtable 'llamados'.")
 
     st.markdown("### 1) Buscar trabajador por documento de identidad")
 
@@ -422,7 +413,8 @@ def get_trabajadores_horas():
             HORAS_EXT_BASE_ID or HORAS_BASE_ID,
             HORAS_TRABAJADORES_TABLE_NAME
         )
-        records = table.all()
+        # ✅ NUEVO: usar view si está definida
+        records = table.all(view=HORAS_EXT_VIEW) if (HORAS_EXT_VIEW or "").strip() else table.all()
     except HTTPError as e:
         st.error("Error leyendo tabla TRABAJADORES (plantilla) para quitar horas.")
         st.code(f"{e.response.status_code}\n{e.response.text}")
@@ -706,10 +698,6 @@ def app_quitar_horas():
 # APP 3: REASIGNACIONES (GUARDAR SOLO URL con Cloudinary)
 # =========================
 
-from pyairtable import Api
-import cloudinary
-import cloudinary.uploader
-
 def _app3_ready() -> bool:
     return all([
         REASIG_SRC_API_KEY, REASIG_SRC_BASE_ID, REASIG_SRC_TABLE,
@@ -720,6 +708,7 @@ def _normalize_view_value(v: str) -> str:
     return (v or "").strip()
 
 def _cloudinary_ready() -> bool:
+    # Cloudinary es opcional: solo se usa si existen estas 3 claves
     return all([
         get_secret("CLOUDINARY_CLOUD_NAME"),
         get_secret("CLOUDINARY_API_KEY"),
@@ -784,7 +773,6 @@ def crear_reasignacion_record(fields: Dict[str, Any]) -> Dict[str, Any]:
 def actualizar_record_imagen_url(record_id: str, image_url: str) -> Dict[str, Any]:
     api = Api(REASIG_AIRTABLE_API_KEY)
     table = api.base(REASIG_AIRTABLE_BASE_ID).table(REASIG_TABLE_NAME)
-    # ✅ Guardamos URL en el campo Imagen (asegúrate en Airtable que el tipo es URL)
     return table.update(record_id, {REASIG_FIELD_IMAGEN: image_url})
 
 @st.cache_data(show_spinner=False)
@@ -805,7 +793,7 @@ def get_reasignaciones_destino() -> pd.DataFrame:
             "Motivo": f.get(REASIG_FIELD_MOTIVO, ""),
             "Responsable": f.get(REASIG_FIELD_RESP, ""),
             "Vehiculo": f.get(REASIG_FIELD_VEHICULO, ""),
-            "Imagen": f.get(REASIG_FIELD_IMAGEN, ""),  # URL
+            "Imagen": f.get(REASIG_FIELD_IMAGEN, ""),
         })
 
     df = pd.DataFrame(rows)
@@ -816,7 +804,7 @@ def get_reasignaciones_destino() -> pd.DataFrame:
 
 def app_reasignaciones():
     st.title("🧩 Reasignaciones")
-    st.caption("Origen: plantilla (vista) • Destino: tabla Reasignaciones • Imagen: se guarda como URL (Cloudinary)")
+    st.caption("Origen: plantilla (vista) • Destino: tabla Reasignaciones • Imagen: se guarda como URL (Cloudinary si está configurado)")
 
     if not _app3_ready():
         st.error("Faltan secrets de APP3. Revisa REASIG_SRC_* y REASIG_*.")
@@ -889,17 +877,12 @@ def app_reasignaciones():
             with colf3:
                 vehiculo = st.selectbox("Vehículo", options=["moto", "bici", "patinete"], index=0, key="reasig_vehiculo")
 
-            # ✅ NUEVO: Motivo como desplegable + opción "Otro" (texto)
+            # ✅ Motivo desplegable + opción “Otro”
             motivo_options = [
                 "Reasignación por límite de km",
                 "Otro (escribir motivo...)",
             ]
-            motivo_sel = st.selectbox(
-                "Motivo",
-                options=motivo_options,
-                index=0,
-                key="reasig_motivo_sel",
-            )
+            motivo_sel = st.selectbox("Motivo", options=motivo_options, index=0, key="reasig_motivo_sel")
 
             motivo_custom = ""
             if motivo_sel == "Otro (escribir motivo...)":
@@ -910,11 +893,10 @@ def app_reasignaciones():
                     key="reasig_motivo_custom",
                 ).strip()
 
-            # ✅ motivo_final es lo que se guarda en Airtable
             motivo_final = motivo_sel if motivo_sel != "Otro (escribir motivo...)" else motivo_custom
 
             img = st.file_uploader(
-                "Imagen (opcional) — se sube a Cloudinary y se guarda URL en Airtable",
+                "Imagen (opcional) — si Cloudinary está configurado se sube y se guarda la URL en Airtable",
                 type=["png", "jpg", "jpeg", "webp"],
                 key="reasig_img",
             )
@@ -927,7 +909,7 @@ def app_reasignaciones():
                 elif not (motivo_final or "").strip():
                     st.warning("Debes indicar un motivo.")
                 elif img is not None and not _cloudinary_ready():
-                    st.error("Faltan secrets de Cloudinary (CLOUDINARY_*).")
+                    st.error("Cloudinary NO está configurado (faltan CLOUDINARY_*). O quita la imagen o configura Cloudinary.")
                 else:
                     rider = st.session_state.rider_sel
                     fecha_str = fecha_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -1020,7 +1002,6 @@ def app_reasignaciones():
         dfm = dfm.sort_values("Fecha_dt", ascending=False)
 
         df_show = dfm[cols_show].copy()
-
         if "Imagen" in df_show.columns:
             df_show["Imagen"] = df_show["Imagen"].fillna("").astype(str).str.strip()
 
@@ -1031,7 +1012,7 @@ def app_reasignaciones():
             column_config={
                 "Imagen": st.column_config.LinkColumn(
                     "Imagen",
-                    help="Abrir imagen",
+                    help="Abrir",
                     display_text="ver imagen",
                     validate="^https?://.*",
                 )
