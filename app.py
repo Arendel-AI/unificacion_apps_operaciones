@@ -403,7 +403,17 @@ def app_llamados_atencion():
 
 # =========================
 # APP 2: QUITAR HORAS (FECHA NO TRABAJADA OBLIGATORIA, SOLO FECHA + DEVOLVER)
+# + NUEVO: TIPO (Reasignación de pedidos / Horas no trabajadas)
 # =========================
+
+# ✅ Nuevo campo en Airtable (tabla quitar_horas_trabajadores)
+# Crea un campo Single select llamado "Tipo"
+HORAS_FIELD_TIPO = get_secret("HORAS_FIELD_TIPO", "Tipo")
+
+TIPO_OPTIONS = [
+    "Reasignación de pedidos",
+    "Horas no trabajadas",
+]
 
 @st.cache_data(show_spinner=False)
 def get_trabajadores_horas():
@@ -413,7 +423,6 @@ def get_trabajadores_horas():
             HORAS_EXT_BASE_ID or HORAS_BASE_ID,
             HORAS_TRABAJADORES_TABLE_NAME
         )
-        # ✅ NUEVO: usar view si está definida
         records = table.all(view=HORAS_EXT_VIEW) if (HORAS_EXT_VIEW or "").strip() else table.all()
     except HTTPError as e:
         st.error("Error leyendo tabla TRABAJADORES (plantilla) para quitar horas.")
@@ -453,6 +462,7 @@ def get_quitas_de_horas():
             "record_id": r["id"],
             "Fecha_Registro": f.get("Fecha_Registro", ""),
             "Fecha_No_Trabajada": f.get(HORAS_FIELD_FECHA_NO_TRABAJADA, ""),
+            "Tipo": f.get(HORAS_FIELD_TIPO, ""),
             "Trabajador_Nombre": f.get("Trabajador_Nombre", ""),
             "Trabajador_DNI": f.get("Trabajador_DNI", ""),
             "Horas_Quitadas": f.get("Horas_Quitadas", None),
@@ -465,9 +475,13 @@ def get_quitas_de_horas():
         df["Month_Key"] = df["Fecha_Registro_dt"].dt.strftime("%Y-%m")
     return df
 
-def registrar_quita_horas(trabajador: Dict, horas: int, responsable: str, fecha_no_trabajada: date):
+def registrar_quita_horas(trabajador: Dict, horas: int, responsable: str, fecha_no_trabajada: date, tipo: str):
     if not fecha_no_trabajada:
         raise ValueError("La fecha no trabajada es obligatoria.")
+
+    tipo = (tipo or "").strip()
+    if tipo not in TIPO_OPTIONS:
+        raise ValueError("Tipo inválido. Debe ser una de las opciones del desplegable.")
 
     table = Table(HORAS_API_KEY, HORAS_BASE_ID, HORAS_QUITAR_HORAS_TABLE_NAME)
 
@@ -478,6 +492,7 @@ def registrar_quita_horas(trabajador: Dict, horas: int, responsable: str, fecha_
         "Responsable": (responsable or "").strip(),
         "Fecha_Registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         HORAS_FIELD_FECHA_NO_TRABAJADA: fecha_no_trabajada.strftime("%Y-%m-%d"),
+        HORAS_FIELD_TIPO: tipo,
     }
     table.create(fields)
 
@@ -486,8 +501,9 @@ def _render_resumen_y_detalle(df_in: pd.DataFrame, titulo: str):
         st.info("No hay registros para los filtros seleccionados.")
         return
 
+    # ✅ Resumen incluye Tipo
     df_grouped = (
-        df_in.groupby(["Trabajador_DNI", "Trabajador_Nombre"], as_index=False)
+        df_in.groupby(["Tipo", "Trabajador_DNI", "Trabajador_Nombre"], as_index=False)
         .agg({"Horas_Quitadas": "sum", "Fecha_Registro_dt": "max"})
         .sort_values(["Horas_Quitadas", "Fecha_Registro_dt"], ascending=[False, False])
         .rename(columns={
@@ -503,6 +519,7 @@ def _render_resumen_y_detalle(df_in: pd.DataFrame, titulo: str):
         cols = [
             "Fecha_Registro_dt",
             "Fecha_No_Trabajada",
+            "Tipo",  # ✅ aparece en detalle también
             "Trabajador_Nombre",
             "Trabajador_DNI",
             "Horas_Quitadas",
@@ -573,9 +590,9 @@ def app_quitar_horas():
     st.caption("📅 La *Fecha no trabajada* es obligatoria y se guarda como **solo fecha** (sin hora).")
 
     with st.form("form_horas_quitar"):
-        colh1, colh2, colh3 = st.columns([1, 1, 1])
+        colh1, colh2, colh3, colh4 = st.columns([1, 1, 1.4, 1])
         with colh1:
-            horas = st.selectbox("Horas a quitar", list(range(1, 10)))
+            horas = st.selectbox("Horas a quitar", list(range(1, 10)), key="horas_a_quitar")
         with colh2:
             fecha_no_trabajada = st.date_input(
                 "Fecha no trabajada (obligatoria)",
@@ -583,6 +600,8 @@ def app_quitar_horas():
                 key="horas_fecha_no_trabajada_quitar"
             )
         with colh3:
+            tipo = st.selectbox("Tipo", TIPO_OPTIONS, index=1, key="horas_tipo_quitar")
+        with colh4:
             guardar = st.form_submit_button("💾 Guardar")
 
         if guardar:
@@ -595,16 +614,19 @@ def app_quitar_horas():
                     st.session_state.trabajador_horas,
                     horas,
                     responsable,
-                    fecha_no_trabajada
+                    fecha_no_trabajada,
+                    tipo
                 )
-                st.success(f"Se registraron **{horas} horas** quitadas por **{responsable}**.")
+                st.success(f"Se registraron **{horas} horas** quitadas por **{responsable}**. Tipo: **{tipo}**")
                 get_quitas_de_horas.clear()
                 st.rerun()
 
     st.markdown("### 🔄 Corrección de horas (devolver)")
 
+    known_tipo = st.session_state.get("horas_tipo_quitar", TIPO_OPTIONS[1])
+
     with st.form("form_devolver_horas"):
-        colc1, colc2, colc3 = st.columns([1, 1, 1])
+        colc1, colc2, colc3, colc4 = st.columns([1, 1, 1.4, 1])
         with colc1:
             horas_devolver = st.selectbox("Horas a devolver", list(range(1, 10)), key="select_horas_devolver")
         with colc2:
@@ -614,6 +636,8 @@ def app_quitar_horas():
                 key="horas_fecha_no_trabajada_devolver"
             )
         with colc3:
+            tipo_dev = st.selectbox("Tipo", TIPO_OPTIONS, index=TIPO_OPTIONS.index(known_tipo) if known_tipo in TIPO_OPTIONS else 1, key="horas_tipo_devolver")
+        with colc4:
             corregir = st.form_submit_button("↩️ Devolver horas")
 
         if corregir:
@@ -626,9 +650,10 @@ def app_quitar_horas():
                     st.session_state.trabajador_horas,
                     -horas_devolver,
                     responsable,
-                    fecha_no_trabajada_dev
+                    fecha_no_trabajada_dev,
+                    tipo_dev
                 )
-                st.success(f"Se han DEVUELTO **{horas_devolver} horas** por **{responsable}** (guardado como *-{horas_devolver}*).")
+                st.success(f"Se han DEVUELTO **{horas_devolver} horas** por **{responsable}** (guardado como *-{horas_devolver}*). Tipo: **{tipo_dev}**")
                 get_quitas_de_horas.clear()
                 st.rerun()
 
@@ -643,20 +668,25 @@ def app_quitar_horas():
     now_local = datetime.now(tz.tzlocal())
     mes_actual = now_local.strftime("%Y-%m")
 
-    f1, f2 = st.columns([2, 2])
+    f0, f1, f2 = st.columns([1.2, 2, 2])
+    with f0:
+        fil_tipo = st.selectbox("Filtrar por tipo", ["(todos)"] + TIPO_OPTIONS, index=0, key="filtro_tipo_horas_mes_actual")
     with f1:
         fil_dni = st.text_input("Filtrar por DNI", key="filtro_dni_horas_mes_actual")
     with f2:
         fil_nombre = st.text_input("Filtrar por nombre", key="filtro_nombre_horas_mes_actual")
 
     df_mes = df[df["Month_Key"] == mes_actual].copy()
+    if fil_tipo and fil_tipo != "(todos)":
+        df_mes["Tipo"] = df_mes["Tipo"].fillna("").astype(str).str.strip()
+        df_mes = df_mes[df_mes["Tipo"] == fil_tipo]
     if fil_dni:
         df_mes = df_mes[df_mes["Trabajador_DNI"].astype(str).str.contains(fil_dni, case=False, na=False)]
     if fil_nombre:
         df_mes = df_mes[df_mes["Trabajador_Nombre"].astype(str).str.contains(fil_nombre, case=False, na=False)]
 
     if df_mes.empty:
-        st.info(f"No hay registros para el mes actual ({mes_actual}).")
+        st.info(f"No hay registros para el mes actual ({mes_actual}) con esos filtros.")
     else:
         _render_resumen_y_detalle(df_mes, f"#### 📊 Resumen mes actual ({mes_actual})")
 
@@ -677,13 +707,18 @@ def app_quitar_horas():
     mes_sel = st.selectbox("Selecciona mes (YYYY-MM)", options=meses_disponibles, index=0, key="hist_mes_selector_unico_horas")
     st.caption(f"Mes seleccionado: **{mes_sel}**")
 
-    h1, h2 = st.columns([2, 2])
+    h0, h1, h2 = st.columns([1.2, 2, 2])
+    with h0:
+        fil_tipo_h = st.selectbox("Filtrar por tipo (histórico)", ["(todos)"] + TIPO_OPTIONS, index=0, key="filtro_tipo_horas_hist")
     with h1:
         fil_dni_h = st.text_input("Filtrar por DNI (histórico)", key="filtro_dni_horas_hist")
     with h2:
         fil_nombre_h = st.text_input("Filtrar por nombre (histórico)", key="filtro_nombre_horas_hist")
 
     df_hist = df[df["Month_Key"] == mes_sel].copy()
+    if fil_tipo_h and fil_tipo_h != "(todos)":
+        df_hist["Tipo"] = df_hist["Tipo"].fillna("").astype(str).str.strip()
+        df_hist = df_hist[df_hist["Tipo"] == fil_tipo_h]
     if fil_dni_h:
         df_hist = df_hist[df_hist["Trabajador_DNI"].astype(str).str.contains(fil_dni_h, case=False, na=False)]
     if fil_nombre_h:
