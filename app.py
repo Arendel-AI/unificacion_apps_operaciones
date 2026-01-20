@@ -42,11 +42,11 @@ TBL_LLAMADOS = get_secret("AIRTABLE_TABLE_LLAMADOS", "llamados")
 
 EXT_API_KEY = get_secret("EXT_AIRTABLE_API_KEY")
 EXT_BASE_ID = get_secret("EXT_AIRTABLE_BASE_ID", BASE_ID or "")
-EXT_TABLE = get_secret("EXT_AIRTABLE_TABLE", "plantilla")
+EXT_TABLE = get_secret("EXT_AIRTABLE_TABLE", "cuentas")
 EXT_DNI_FIELD = get_secret("EXT_DNI_FIELD", "documentoDniONie")
 EXT_NAME_FIELD = get_secret("EXT_NAME_FIELD", "nombre")
 
-# ✅ NUEVO: view para APP1 (lectura en plantilla)
+# ✅ NUEVO: view para APP1 (lectura en cuentas)
 EXT_VIEW = get_secret("EXT_VIEW", "")
 
 # ============================================================
@@ -62,7 +62,7 @@ HORAS_QUITAR_HORAS_TABLE_NAME = get_secret(
 HORAS_EXT_API_KEY = get_secret("HORAS_EXT_AIRTABLE_API_KEY")
 HORAS_EXT_BASE_ID = get_secret("HORAS_EXT_AIRTABLE_BASE_ID", HORAS_BASE_ID or "")
 HORAS_TRABAJADORES_TABLE_NAME = get_secret(
-    "HORAS_TRABAJADORES_TABLE_NAME", "plantilla"
+    "HORAS_TRABAJADORES_TABLE_NAME", "cuentas"
 )
 
 # ✅ NUEVO: view para APP2 (lectura en plantilla)
@@ -80,7 +80,7 @@ HORAS_FIELD_FECHA_NO_TRABAJADA = get_secret(
 # ORIGEN
 REASIG_SRC_API_KEY = get_secret("REASIG_SRC_API_KEY")
 REASIG_SRC_BASE_ID = get_secret("REASIG_SRC_BASE_ID")
-REASIG_SRC_TABLE = get_secret("REASIG_SRC_TABLE", "plantilla")
+REASIG_SRC_TABLE = get_secret("REASIG_SRC_TABLE", "cuentas")
 
 # ✅ view puede ir vacío
 REASIG_SRC_VIEW = get_secret("REASIG_SRC_VIEW", "")
@@ -269,7 +269,7 @@ lookup_repo = TrabajadoresLookup(EXT_BASE_ID or BASE_ID, EXT_TABLE, EXT_DNI_FIEL
 
 def app_llamados_atencion():
     st.title("Control de llamados de atención")
-    st.caption("Busca por DNI en la tabla externa (plantilla), trae el nombre y registra llamados en Airtable 'llamados'.")
+    st.caption("Busca por DNI en la tabla externa (cuentas), trae el nombre y registra llamados en Airtable 'llamados'.")
 
     st.markdown("### 1) Buscar trabajador por documento de identidad")
 
@@ -425,7 +425,7 @@ def get_trabajadores_horas():
         )
         records = table.all(view=HORAS_EXT_VIEW) if (HORAS_EXT_VIEW or "").strip() else table.all()
     except HTTPError as e:
-        st.error("Error leyendo tabla TRABAJADORES (plantilla) para quitar horas.")
+        st.error("Error leyendo tabla TRABAJADORES (cuentas) para quitar horas.")
         st.code(f"{e.response.status_code}\n{e.response.text}")
         return []
 
@@ -839,7 +839,7 @@ def get_reasignaciones_destino() -> pd.DataFrame:
 
 def app_reasignaciones():
     st.title("🧩 Reasignaciones")
-    st.caption("Origen: plantilla (vista) • Destino: tabla Reasignaciones • Imagen: se guarda como URL (Cloudinary si está configurado)")
+    st.caption("Origen: cuentas (vista) • Destino: tabla Reasignaciones • Imagen: se guarda como URL (Cloudinary si está configurado)")
 
     if not _app3_ready():
         st.error("Faltan secrets de APP3. Revisa REASIG_SRC_* y REASIG_*.")
