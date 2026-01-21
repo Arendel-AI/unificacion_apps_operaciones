@@ -403,6 +403,7 @@ def app_llamados_atencion():
 
 # =========================
 # APP 2: QUITAR HORAS (FECHA NO TRABAJADA OBLIGATORIA, SOLO FECHA + DEVOLVER)
+# + CORTE DIA 20 (PERIODO 20 -> 20)
 # + NUEVO: TIPO (Reasignación de pedidos / Horas no trabajadas)
 # =========================
 
@@ -414,6 +415,55 @@ TIPO_OPTIONS = [
     "Reasignación de pedidos",
     "Horas no trabajadas",
 ]
+
+# ✅ CORTE: día 20 a las 12:00 (hora local)
+CORTE_DIA = int(get_secret("HORAS_CORTE_DIA", "20") or 20)
+CORTE_HORA = int(get_secret("HORAS_CORTE_HORA", "12") or 12)
+CORTE_MINUTO = int(get_secret("HORAS_CORTE_MINUTO", "0") or 0)
+
+def _period_start_for_dt(dt: datetime) -> datetime:
+    """
+    Devuelve el inicio del periodo (corte) al que pertenece dt.
+    Periodo = [corte, siguiente_corte)
+    Corte: día CORTE_DIA a las CORTE_HORA:CORTE_MINUTO (tz local)
+    """
+    if dt is None or pd.isna(dt):
+        return None  # type: ignore
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz.tzlocal())
+
+    # Construimos el corte del mes actual
+    y, m = dt.year, dt.month
+    corte_mes = datetime(y, m, CORTE_DIA, CORTE_HORA, CORTE_MINUTO, tzinfo=dt.tzinfo)
+
+    # Si dt está antes del corte del mes, el periodo empezó en el corte del mes anterior
+    if dt < corte_mes:
+        if m == 1:
+            y2, m2 = y - 1, 12
+        else:
+            y2, m2 = y, m - 1
+        return datetime(y2, m2, CORTE_DIA, CORTE_HORA, CORTE_MINUTO, tzinfo=dt.tzinfo)
+
+    return corte_mes
+
+def _period_key(start_dt: datetime) -> str:
+    """Clave estable para selectbox."""
+    if start_dt is None:
+        return ""
+    return start_dt.strftime("%Y-%m-%d %H:%M")
+
+def _period_label(start_dt: datetime) -> str:
+    """Etiqueta humana 'Del 20/01/2026 12:00 al 20/02/2026 12:00'."""
+    if start_dt is None:
+        return "(sin fecha)"
+    # Fin = +1 mes mismo día/hora
+    y, m = start_dt.year, start_dt.month
+    if m == 12:
+        end_dt = datetime(y + 1, 1, CORTE_DIA, CORTE_HORA, CORTE_MINUTO, tzinfo=start_dt.tzinfo)
+    else:
+        end_dt = datetime(y, m + 1, CORTE_DIA, CORTE_HORA, CORTE_MINUTO, tzinfo=start_dt.tzinfo)
+    return f"Del {start_dt.strftime('%d/%m/%Y %H:%M')} al {end_dt.strftime('%d/%m/%Y %H:%M')}"
 
 @st.cache_data(show_spinner=False)
 def get_trabajadores_horas():
@@ -472,7 +522,21 @@ def get_quitas_de_horas():
     df = pd.DataFrame(rows)
     if not df.empty:
         df["Fecha_Registro_dt"] = pd.to_datetime(df["Fecha_Registro"], errors="coerce")
-        df["Month_Key"] = df["Fecha_Registro_dt"].dt.strftime("%Y-%m")
+
+        # ✅ Periodo por corte día 20
+        # Asegura tz local para comparaciones
+        def _ensure_tz(x):
+            if pd.isna(x) or x is None:
+                return pd.NaT
+            if getattr(x, "tzinfo", None) is None:
+                return x.replace(tzinfo=tz.tzlocal())
+            return x
+
+        df["Fecha_Registro_dt"] = df["Fecha_Registro_dt"].apply(_ensure_tz)
+        df["Period_Start_dt"] = df["Fecha_Registro_dt"].apply(lambda x: _period_start_for_dt(x) if not pd.isna(x) else pd.NaT)
+
+        df["Period_Key"] = df["Period_Start_dt"].apply(lambda x: _period_key(x) if not pd.isna(x) else "")
+        df["Period_Label"] = df["Period_Start_dt"].apply(lambda x: _period_label(x) if not pd.isna(x) else "")
     return df
 
 def registrar_quita_horas(trabajador: Dict, horas: int, responsable: str, fecha_no_trabajada: date, tipo: str):
@@ -519,7 +583,7 @@ def _render_resumen_y_detalle(df_in: pd.DataFrame, titulo: str):
         cols = [
             "Fecha_Registro_dt",
             "Fecha_No_Trabajada",
-            "Tipo",  # ✅ aparece en detalle también
+            "Tipo",
             "Trabajador_Nombre",
             "Trabajador_DNI",
             "Horas_Quitadas",
@@ -636,7 +700,12 @@ def app_quitar_horas():
                 key="horas_fecha_no_trabajada_devolver"
             )
         with colc3:
-            tipo_dev = st.selectbox("Tipo", TIPO_OPTIONS, index=TIPO_OPTIONS.index(known_tipo) if known_tipo in TIPO_OPTIONS else 1, key="horas_tipo_devolver")
+            tipo_dev = st.selectbox(
+                "Tipo",
+                TIPO_OPTIONS,
+                index=TIPO_OPTIONS.index(known_tipo) if known_tipo in TIPO_OPTIONS else 1,
+                key="horas_tipo_devolver"
+            )
         with colc4:
             corregir = st.form_submit_button("↩️ Devolver horas")
 
@@ -658,7 +727,7 @@ def app_quitar_horas():
                 st.rerun()
 
     st.divider()
-    st.subheader("3️⃣ Horas en curso (mes actual)")
+    st.subheader(f"3️⃣ Horas en curso (periodo {CORTE_DIA} → {CORTE_DIA})")
 
     df = get_quitas_de_horas()
     if df.empty:
@@ -666,46 +735,66 @@ def app_quitar_horas():
         return
 
     now_local = datetime.now(tz.tzlocal())
-    mes_actual = now_local.strftime("%Y-%m")
+    periodo_start = _period_start_for_dt(now_local)
+    periodo_key_actual = _period_key(periodo_start)
+    periodo_label_actual = _period_label(periodo_start)
 
     f0, f1, f2 = st.columns([1.2, 2, 2])
     with f0:
-        fil_tipo = st.selectbox("Filtrar por tipo", ["(todos)"] + TIPO_OPTIONS, index=0, key="filtro_tipo_horas_mes_actual")
+        fil_tipo = st.selectbox("Filtrar por tipo", ["(todos)"] + TIPO_OPTIONS, index=0, key="filtro_tipo_horas_periodo_actual")
     with f1:
-        fil_dni = st.text_input("Filtrar por DNI", key="filtro_dni_horas_mes_actual")
+        fil_dni = st.text_input("Filtrar por DNI", key="filtro_dni_horas_periodo_actual")
     with f2:
-        fil_nombre = st.text_input("Filtrar por nombre", key="filtro_nombre_horas_mes_actual")
+        fil_nombre = st.text_input("Filtrar por nombre", key="filtro_nombre_horas_periodo_actual")
 
-    df_mes = df[df["Month_Key"] == mes_actual].copy()
+    df_act = df[df["Period_Key"] == periodo_key_actual].copy()
     if fil_tipo and fil_tipo != "(todos)":
-        df_mes["Tipo"] = df_mes["Tipo"].fillna("").astype(str).str.strip()
-        df_mes = df_mes[df_mes["Tipo"] == fil_tipo]
+        df_act["Tipo"] = df_act["Tipo"].fillna("").astype(str).str.strip()
+        df_act = df_act[df_act["Tipo"] == fil_tipo]
     if fil_dni:
-        df_mes = df_mes[df_mes["Trabajador_DNI"].astype(str).str.contains(fil_dni, case=False, na=False)]
+        df_act = df_act[df_act["Trabajador_DNI"].astype(str).str.contains(fil_dni, case=False, na=False)]
     if fil_nombre:
-        df_mes = df_mes[df_mes["Trabajador_Nombre"].astype(str).str.contains(fil_nombre, case=False, na=False)]
+        df_act = df_act[df_act["Trabajador_Nombre"].astype(str).str.contains(fil_nombre, case=False, na=False)]
 
-    if df_mes.empty:
-        st.info(f"No hay registros para el mes actual ({mes_actual}) con esos filtros.")
+    if df_act.empty:
+        st.info(f"No hay registros en el periodo actual ({periodo_label_actual}) con esos filtros.")
     else:
-        _render_resumen_y_detalle(df_mes, f"#### 📊 Resumen mes actual ({mes_actual})")
+        _render_resumen_y_detalle(df_act, f"#### 📊 Resumen periodo actual — {periodo_label_actual}")
 
     st.divider()
-    st.subheader("📚 Histórico de horas (meses anteriores)")
+    st.subheader("📚 Histórico de horas (periodos anteriores)")
     st.caption("🔒 Solo lectura: el histórico no se puede modificar desde el dashboard.")
 
-    meses_disponibles = sorted(
-        [m for m in df["Month_Key"].dropna().unique().tolist() if isinstance(m, str)],
-        reverse=True
+    # Periodos disponibles (orden desc)
+    periodos = (
+        df[["Period_Key", "Period_Label"]]
+        .dropna()
+        .drop_duplicates()
     )
-    meses_disponibles = [m for m in meses_disponibles if m != mes_actual]
+    periodos = periodos[periodos["Period_Key"].astype(str).str.strip() != ""]
+    periodos = periodos.sort_values("Period_Key", ascending=False)
 
-    if not meses_disponibles:
-        st.info("Todavía no hay meses anteriores con registros.")
+    # excluye el actual
+    periodos_hist = periodos[periodos["Period_Key"] != periodo_key_actual].copy()
+
+    if periodos_hist.empty:
+        st.info("Todavía no hay periodos anteriores con registros.")
         return
 
-    mes_sel = st.selectbox("Selecciona mes (YYYY-MM)", options=meses_disponibles, index=0, key="hist_mes_selector_unico_horas")
-    st.caption(f"Mes seleccionado: **{mes_sel}**")
+    # Selectbox por etiqueta, guardando key
+    options = periodos_hist.to_dict("records")
+    labels = [x["Period_Label"] for x in options]
+    label_to_key = {x["Period_Label"]: x["Period_Key"] for x in options}
+
+    label_sel = st.selectbox(
+        "Selecciona periodo",
+        options=labels,
+        index=0,
+        key="hist_periodo_selector_unico_horas"
+    )
+    periodo_sel_key = label_to_key.get(label_sel, "")
+
+    st.caption(f"Periodo seleccionado: **{label_sel}**")
 
     h0, h1, h2 = st.columns([1.2, 2, 2])
     with h0:
@@ -715,7 +804,7 @@ def app_quitar_horas():
     with h2:
         fil_nombre_h = st.text_input("Filtrar por nombre (histórico)", key="filtro_nombre_horas_hist")
 
-    df_hist = df[df["Month_Key"] == mes_sel].copy()
+    df_hist = df[df["Period_Key"] == periodo_sel_key].copy()
     if fil_tipo_h and fil_tipo_h != "(todos)":
         df_hist["Tipo"] = df_hist["Tipo"].fillna("").astype(str).str.strip()
         df_hist = df_hist[df_hist["Tipo"] == fil_tipo_h]
@@ -725,9 +814,9 @@ def app_quitar_horas():
         df_hist = df_hist[df_hist["Trabajador_Nombre"].astype(str).str.contains(fil_nombre_h, case=False, na=False)]
 
     if df_hist.empty:
-        st.info("No hay registros para ese mes / filtros.")
+        st.info("No hay registros para ese periodo / filtros.")
     else:
-        _render_resumen_y_detalle(df_hist, f"#### 📊 Resumen histórico ({mes_sel})")
+        _render_resumen_y_detalle(df_hist, f"#### 📊 Resumen histórico — {label_sel}")
 
 # =========================
 # APP 3: REASIGNACIONES (GUARDAR SOLO URL con Cloudinary)
