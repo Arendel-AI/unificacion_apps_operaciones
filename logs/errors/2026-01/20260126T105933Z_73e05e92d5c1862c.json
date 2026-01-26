@@ -1,0 +1,13 @@
+{
+  "ts_utc": "2026-01-26T10:59:33.826917+00:00",
+  "app_instance": "panel-repartidores-prod",
+  "where": "DEBUG:manual_test_button",
+  "error_id": "73e05e92d5c1862c",
+  "exc_type": "RuntimeError",
+  "exc_message": "TEST_ERROR_LOGGING: prueba manual del logger",
+  "traceback": "Traceback (most recent call last):\n  File \"/Users/juanjosegranadagallo/Desktop/arendel/unificacion_llamados_quitar_horas/app.py\", line 123, in run_with_error_logging\n    return fn()\n  File \"/Users/juanjosegranadagallo/Desktop/arendel/unificacion_llamados_quitar_horas/app.py\", line 1274, in _boom\n    raise RuntimeError(\"TEST_ERROR_LOGGING: prueba manual del logger\")\nRuntimeError: TEST_ERROR_LOGGING: prueba manual del logger\n",
+  "extra": {
+    "test": true,
+    "note": "botón manual"
+  }
+}
