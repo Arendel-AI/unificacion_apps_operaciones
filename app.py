@@ -704,7 +704,7 @@ def get_trabajadores_horas():
         trabajadores.append({
             "record_id": r.get("id"),
             "Nombre": f.get("nombre", ""),
-            "DNI": f.get("documentoDniONie", ""),
+            "DNI": f.get("documentoDeIdentidad", ""),
         })
     return trabajadores
 
