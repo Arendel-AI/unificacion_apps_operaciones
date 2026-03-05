@@ -190,8 +190,8 @@ TBL_LLAMADOS = get_secret("AIRTABLE_TABLE_LLAMADOS", "llamados")
 
 EXT_API_KEY = get_secret("EXT_AIRTABLE_API_KEY")
 EXT_BASE_ID = get_secret("EXT_AIRTABLE_BASE_ID", BASE_ID or "")
-EXT_TABLE = get_secret("EXT_AIRTABLE_TABLE", "cuentas")
-EXT_DNI_FIELD = get_secret("EXT_DNI_FIELD", "documentoDniONie")
+EXT_TABLE = get_secret("EXT_AIRTABLE_TABLE", "Personal")
+EXT_DNI_FIELD = get_secret("EXT_DNI_FIELD", "DeIdentidadDniONie")
 EXT_NAME_FIELD = get_secret("EXT_NAME_FIELD", "nombre")
 EXT_VIEW = get_secret("EXT_VIEW", "")
 
@@ -205,7 +205,7 @@ HORAS_QUITAR_HORAS_TABLE_NAME = get_secret("HORAS_QUITAR_HORAS_TABLE_NAME", "qui
 
 HORAS_EXT_API_KEY = get_secret("HORAS_EXT_AIRTABLE_API_KEY")
 HORAS_EXT_BASE_ID = get_secret("HORAS_EXT_AIRTABLE_BASE_ID", HORAS_BASE_ID or "")
-HORAS_TRABAJADORES_TABLE_NAME = get_secret("HORAS_TRABAJADORES_TABLE_NAME", "cuentas")
+HORAS_TRABAJADORES_TABLE_NAME = get_secret("HORAS_TRABAJADORES_TABLE_NAME", "Personal")
 
 HORAS_EXT_VIEW = get_secret("HORAS_EXT_VIEW", "")
 HORAS_FIELD_FECHA_NO_TRABAJADA = get_secret("HORAS_FIELD_FECHA_NO_TRABAJADA", "Fecha_No_Trabajada")
@@ -216,12 +216,12 @@ HORAS_FIELD_FECHA_NO_TRABAJADA = get_secret("HORAS_FIELD_FECHA_NO_TRABAJADA", "F
 
 REASIG_SRC_API_KEY = get_secret("REASIG_SRC_API_KEY")
 REASIG_SRC_BASE_ID = get_secret("REASIG_SRC_BASE_ID")
-REASIG_SRC_TABLE = get_secret("REASIG_SRC_TABLE", "cuentas")
+REASIG_SRC_TABLE = get_secret("REASIG_SRC_TABLE", "Personal")
 REASIG_SRC_VIEW = get_secret("REASIG_SRC_VIEW", "")
 
 PLANTILLA_RIDER_ID_FIELD = get_secret("PLANTILLA_RIDER_ID_FIELD", "riderId")
 PLANTILLA_NAME_FIELD = get_secret("PLANTILLA_NAME_FIELD", "nombre")
-PLANTILLA_DNI_FIELD = get_secret("PLANTILLA_DNI_FIELD", "documentoDniONie")
+PLANTILLA_DNI_FIELD = get_secret("PLANTILLA_DNI_FIELD", "documentoDeIdentidad")
 
 REASIG_AIRTABLE_API_KEY = get_secret("REASIG_AIRTABLE_API_KEY")
 REASIG_AIRTABLE_BASE_ID = get_secret("REASIG_AIRTABLE_BASE_ID")
@@ -462,7 +462,7 @@ lookup_repo = TrabajadoresLookup(EXT_BASE_ID or BASE_ID, EXT_TABLE, EXT_DNI_FIEL
 
 def app_llamados_atencion():
     st.title("Control de llamados de atención")
-    st.caption("Busca por DNI en la tabla externa (cuentas), trae el nombre y registra llamados en Airtable 'llamados'.")
+    st.caption("Busca por DNI en la tabla externa (Personal), trae el nombre y registra llamados en Airtable 'llamados'.")
 
     st.markdown("### 1) Buscar trabajador por documento de identidad")
 
@@ -683,7 +683,7 @@ def get_trabajadores_horas():
             where="APP2:get_trabajadores_horas_http",
             extra={"view": HORAS_EXT_VIEW or "", "table": HORAS_TRABAJADORES_TABLE_NAME},
         )
-        st.error("Error leyendo tabla TRABAJADORES (cuentas). (log enviado)")
+        st.error("Error leyendo tabla TRABAJADORES (Personal). (log enviado)")
         try:
             st.code(f"{e.response.status_code}\n{e.response.text}")
         except Exception:
@@ -695,7 +695,7 @@ def get_trabajadores_horas():
             where="APP2:get_trabajadores_horas",
             extra={"view": HORAS_EXT_VIEW or "", "table": HORAS_TRABAJADORES_TABLE_NAME},
         )
-        st.error("Error leyendo tabla TRABAJADORES (cuentas). (log enviado)")
+        st.error("Error leyendo tabla TRABAJADORES (Personal). (log enviado)")
         return []
 
     trabajadores = []
@@ -1206,7 +1206,7 @@ def get_reasignaciones_destino() -> pd.DataFrame:
 
 def app_reasignaciones():
     st.title("🧩 Reasignaciones")
-    st.caption("Origen: cuentas (vista) • Destino: tabla Reasignaciones • Imagen: se guarda como URL (Cloudinary si está configurado)")
+    st.caption("Origen: Personal (vista) • Destino: tabla Reasignaciones • Imagen: se guarda como URL (Cloudinary si está configurado)")
 
     if not _app3_ready():
         _stop_with_log(
